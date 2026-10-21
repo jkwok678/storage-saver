@@ -38,6 +38,8 @@ pub struct ChildEntry {
     is_dir: bool,
     /// Known up front for files and stored folders. `None` until a walk measures the folder.
     bytes: Option<u64>,
+    /// Last modification time, in seconds since the Unix epoch.
+    modified: Option<u64>,
     error: Option<String>,
 }
 
@@ -595,30 +597,37 @@ fn list_children(root: &Path) -> Result<Vec<ChildEntry>, String> {
             },
         };
         let is_dir = is_real_dir(&file_type);
+        let metadata = fs::symlink_metadata(&path);
+        let modified = metadata.as_ref().ok().and_then(modified_secs);
         let (bytes, error) = if is_dir {
             (None, None)
-        } else if file_type.is_file() {
-            match fs::symlink_metadata(&path) {
-                Ok(metadata) => (Some(allocated_bytes(&metadata)), None),
-                Err(err) => {
-                    let mut trouble = Trouble::default();
-                    trouble.note_io(&err);
-                    if trouble.flags & DENIED != 0 {
-                        (None, Some(MeasureError::NotPermitted.text()))
-                    } else {
-                        (Some(0), trouble.message)
-                    }
-                }
-            }
-        } else {
+        } else if let Ok(metadata) = &metadata {
             // Links, sockets and the like take no space of their own worth showing.
+            let bytes = if file_type.is_file() {
+                allocated_bytes(metadata)
+            } else {
+                0
+            };
+            (Some(bytes), None)
+        } else if !file_type.is_file() {
             (Some(0), None)
+        } else {
+            let mut trouble = Trouble::default();
+            if let Err(err) = &metadata {
+                trouble.note_io(err);
+            }
+            if trouble.flags & DENIED != 0 {
+                (None, Some(MeasureError::NotPermitted.text()))
+            } else {
+                (Some(0), trouble.message)
+            }
         };
         children.push(ChildEntry {
             name: entry.file_name().to_string_lossy().into_owned(),
             path: path.to_string_lossy().into_owned(),
             is_dir,
             bytes,
+            modified,
             error,
         });
     }
@@ -933,6 +942,10 @@ fn read_u64(bytes: &[u8], at: usize) -> Option<u64> {
 /// Allocated space, in bytes. `st_blocks` is reported in 512-byte units.
 fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.blocks().saturating_mul(512)
+}
+
+fn modified_secs(metadata: &fs::Metadata) -> Option<u64> {
+    u64::try_from(metadata.mtime()).ok()
 }
 
 fn walk_pool() -> &'static rayon::ThreadPool {
@@ -1458,12 +1471,14 @@ mod tests {
                 path: "/Users".into(),
                 is_dir: true,
                 bytes: None,
+                modified: Some(1_700_000_000),
                 error: None,
             }],
         };
         let json = serde_json::to_value(&started).unwrap();
         assert_eq!(json["event"], "started");
         assert_eq!(json["data"]["entries"][0]["isDir"], true);
+        assert_eq!(json["data"]["entries"][0]["modified"], 1_700_000_000u64);
         assert!(json["data"]["entries"][0]["bytes"].is_null());
         assert_eq!(
             serde_json::to_value(ScanEvent::Done).unwrap()["event"],

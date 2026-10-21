@@ -35,10 +35,47 @@ input {
 }
 
 .summary h1 {
-  margin: 0 0 12px;
+  margin: 0;
   font-size: 22px;
   font-weight: 650;
   letter-spacing: -0.02em;
+}
+
+.summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.views {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #e8e8ed;
+}
+
+.views button {
+  border: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: transparent;
+  color: #3a3a3c;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.views button:hover {
+  color: #1c1c1e;
+}
+
+.views button[aria-pressed="true"] {
+  background: #fff;
+  color: #1c1c1e;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
 }
 
 .capacity-track {
@@ -189,8 +226,7 @@ input {
 }
 
 .finder-table thead th + th,
-.finder-table tbody td,
-.finder-table tbody th {
+.finder-table tbody td {
   border-left: 1px solid #ededf0;
 }
 
@@ -326,6 +362,143 @@ input {
   padding: 18px 12px;
 }
 
+.largest {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.largest-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.largest-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.largest-heading .status {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.largest-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d8d8dd;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.largest-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.largest-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.largest-list li {
+  border-bottom: 1px solid #f0f0f2;
+}
+
+.largest-list li:last-child {
+  border-bottom: 0;
+}
+
+.largest-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2rem 16px minmax(0, 1.5fr) minmax(80px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.largest-row:hover {
+  background: #f0f4fb;
+}
+
+.largest-row:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: -2px;
+}
+
+.rank {
+  text-align: right;
+  color: #8e8e93;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.largest-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.largest-name .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.largest-name .parent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8e8e93;
+  font-size: 11.5px;
+}
+
+.largest-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #ececf0;
+  overflow: hidden;
+}
+
+.largest-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0a84ff;
+}
+
+.largest-size {
+  min-width: 6.5rem;
+  text-align: right;
+  color: #3a3a3c;
+  font-variant-numeric: tabular-nums;
+}
+
+.largest-empty {
+  padding: 28px 12px;
+  text-align: center;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     color: #f5f5f7;
@@ -356,8 +529,7 @@ input {
   }
 
   .finder-table thead th + th,
-  .finder-table tbody td,
-  .finder-table tbody th {
+  .finder-table tbody td {
     border-left-color: #303033;
   }
 
@@ -404,5 +576,53 @@ input {
     background: #2c2c2e;
     border-top-color: #3a3a3c;
     color: #aeaeb2;
+  }
+
+  .views {
+    background: #2c2c2e;
+  }
+
+  .views button {
+    color: #c7c7cc;
+  }
+
+  .views button:hover {
+    color: #f5f5f7;
+  }
+
+  .views button[aria-pressed="true"] {
+    background: #48484a;
+    color: #f5f5f7;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+
+  .largest-panel {
+    background: #232326;
+    border-color: #3a3a3c;
+  }
+
+  .largest-list li {
+    border-bottom-color: #2e2e31;
+  }
+
+  .largest-row:hover {
+    background: #2f333d;
+  }
+
+  .rank,
+  .largest-name .parent {
+    color: #8e8e93;
+  }
+
+  .largest-bar {
+    background: #3a3a3c;
+  }
+
+  .largest-size {
+    color: #d1d1d6;
+  }
+
+  .error {
+    color: #ff9f6b;
   }
 }

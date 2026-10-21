@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::ffi::CString;
 use std::fs::{self, FileType};
 use std::io::{self, ErrorKind};
@@ -10,10 +11,15 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
 use tauri::ipc::Channel;
 
 /// Latest scan wins. Older walks notice the generation change and stop.
 static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Latest largest-files scan wins. Kept apart from `SCAN_GENERATION` so browsing and
+/// ranking can be stopped independently when the view changes.
+static LARGEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Folder totals from finished scans. Opening a folder reads them instead of walking it again.
 static STORED: Mutex<Option<Tree>> = Mutex::new(None);
@@ -55,6 +61,26 @@ pub enum ScanEvent {
         error: Option<String>,
     },
     Done,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LargestFile {
+    pub name: String,
+    pub path: String,
+    pub bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "event", content = "data")]
+pub enum LargestEvent {
+    Batch {
+        files: Vec<LargestFile>,
+        scanned: u64,
+    },
+    Done {
+        scanned: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -331,6 +357,30 @@ pub async fn scan_directory(
     }
 }
 
+#[tauri::command]
+pub fn stop_scan() {
+    SCAN_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+#[tauri::command]
+pub async fn scan_largest_files(
+    path: String,
+    limit: usize,
+    on_event: Channel<LargestEvent>,
+) -> Result<(), String> {
+    match tauri::async_runtime::spawn_blocking(move || run_largest_scan(path, limit, on_event))
+        .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn stop_largest_scan() {
+    LARGEST_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
 fn run_scan(path: String, refresh: bool, on_event: Channel<ScanEvent>) -> Result<(), String> {
     let generation = SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let root = PathBuf::from(&path);
@@ -359,7 +409,7 @@ fn scan_into(
     };
 
     let mut children = list_children(root)?;
-    children.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    children.sort_by_key(|entry| entry.name.to_lowercase());
     let pending = fill_stored_sizes(stored, root, &mut children, refresh);
 
     if cancelled() {
@@ -481,6 +531,191 @@ fn walk_folders(
     });
 
     completed.then_some(walked)
+}
+
+fn run_largest_scan(
+    path: String,
+    limit: usize,
+    on_event: Channel<LargestEvent>,
+) -> Result<(), String> {
+    let generation = LARGEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    let root = PathBuf::from(&path);
+    if !root.is_absolute() {
+        return Err("path must be absolute".into());
+    }
+    let metadata = fs::symlink_metadata(&root).map_err(|err| err.to_string())?;
+    if !is_real_dir(&metadata.file_type()) {
+        return Err("path must be a folder".into());
+    }
+    let scan = LargestScan::new(limit.clamp(1, 1_000));
+
+    std::thread::scope(|scope| {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let events = &on_event;
+        let scan_ref = &scan;
+        scope.spawn(move || {
+            let mut last_scanned = u64::MAX;
+            loop {
+                match done_rx.recv_timeout(Duration::from_millis(300)) {
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if largest_cancelled(generation) {
+                            break;
+                        }
+                        let scanned = scan_ref.scanned.load(Ordering::Relaxed);
+                        if scanned == last_scanned {
+                            continue;
+                        }
+                        last_scanned = scanned;
+                        let files = scan_ref.snapshot();
+                        if events.send(LargestEvent::Batch { files, scanned }).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        walk_pool().scope(|walk_scope| {
+            largest_walk(walk_scope, &scan, root.clone(), Some(generation));
+        });
+        drop(done_tx);
+    });
+
+    if largest_cancelled(generation) {
+        return Ok(());
+    }
+    let scanned = scan.scanned.load(Ordering::Relaxed);
+    let _ = on_event.send(LargestEvent::Batch {
+        files: scan.snapshot(),
+        scanned,
+    });
+    let _ = on_event.send(LargestEvent::Done { scanned });
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RankedFile {
+    bytes: u64,
+    path: String,
+    name: String,
+}
+
+impl Ord for RankedFile {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.bytes
+            .cmp(&other.bytes)
+            .then_with(|| self.path.cmp(&other.path))
+    }
+}
+
+impl PartialOrd for RankedFile {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// The largest files seen so far, kept as a min-heap so only `limit` are held at once.
+struct LargestScan {
+    limit: usize,
+    files: Mutex<BinaryHeap<Reverse<RankedFile>>>,
+    /// Hard links count once, as they do in folder sizes.
+    links: Mutex<HashSet<(u64, u64)>>,
+    scanned: AtomicU64,
+}
+
+impl LargestScan {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            files: Mutex::new(BinaryHeap::with_capacity(limit)),
+            links: Mutex::new(HashSet::new()),
+            scanned: AtomicU64::new(0),
+        }
+    }
+
+    fn add(&self, dir: &Path, files: Vec<(String, u64)>) {
+        if files.is_empty() {
+            return;
+        }
+        let mut heap = lock(&self.files);
+        for (name, bytes) in files {
+            if heap.len() >= self.limit {
+                let Some(smallest) = heap.peek().map(|file| file.0.bytes) else {
+                    continue;
+                };
+                if bytes <= smallest {
+                    continue;
+                }
+            }
+            heap.push(Reverse(RankedFile {
+                bytes,
+                path: dir.join(&name).to_string_lossy().into_owned(),
+                name,
+            }));
+            if heap.len() > self.limit {
+                heap.pop();
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Vec<LargestFile> {
+        let heap = lock(&self.files);
+        let mut files: Vec<&RankedFile> = heap.iter().map(|file| &file.0).collect();
+        files.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
+        files
+            .into_iter()
+            .map(|file| LargestFile {
+                name: file.name.clone(),
+                path: file.path.clone(),
+                bytes: file.bytes,
+            })
+            .collect()
+    }
+}
+
+/// Walk `dir` and keep its files in `scan`, queueing subfolders as tasks of their own.
+fn largest_walk<'s>(
+    scope: &rayon::Scope<'s>,
+    scan: &'s LargestScan,
+    dir: PathBuf,
+    generation: Option<u64>,
+) {
+    if generation.is_some_and(largest_cancelled) {
+        return;
+    }
+
+    let mut files = Vec::new();
+    let mut folders = Vec::new();
+    // An unreadable folder simply contributes no files to the ranking.
+    let _ = read_dir_bulk(&dir, |entry| match entry {
+        BulkEntry::File {
+            name,
+            bytes,
+            links,
+            dev,
+            file_id,
+        } => {
+            let repeat = links > 1 && !lock(&scan.links).insert((dev, file_id));
+            if !repeat {
+                files.push((name, bytes));
+            }
+        }
+        BulkEntry::Folder(name) => folders.push(name),
+        BulkEntry::Other | BulkEntry::Error(_) => {}
+    });
+    folders.retain(|name| !is_excluded(&dir.join(name)));
+
+    scan.scanned
+        .fetch_add(files.len() as u64, Ordering::Relaxed);
+    scan.add(&dir, files);
+    for name in folders {
+        let path = dir.join(name);
+        scope.spawn(move |scope| largest_walk(scope, scan, path, generation));
+    }
+}
+
+fn largest_cancelled(generation: u64) -> bool {
+    LARGEST_GENERATION.load(Ordering::Acquire) != generation
 }
 
 /// Build the tree for `root` from fresh walks and stored folders, and keep it.
@@ -724,6 +959,7 @@ fn visit<'s>(scope: &rayon::Scope<'s>, walk: &'s Walk, dir: PathBuf, id: u32) {
             links,
             dev,
             file_id,
+            ..
         } => {
             let repeat = links > 1 && !lock(&walk.links).insert((dev, file_id));
             if !repeat {
@@ -758,6 +994,7 @@ fn visit<'s>(scope: &rayon::Scope<'s>, walk: &'s Walk, dir: PathBuf, id: u32) {
 /// One entry from `getattrlistbulk`.
 enum BulkEntry {
     File {
+        name: String,
         bytes: u64,
         links: u32,
         dev: u64,
@@ -921,6 +1158,7 @@ fn parse_bulk_entry(entry: &[u8]) -> Option<BulkEntry> {
                 0
             };
             BulkEntry::File {
+                name: String::from_utf8_lossy(name).into_owned(),
                 bytes,
                 links,
                 dev: u64::from(dev),
@@ -1028,6 +1266,12 @@ mod tests {
         measure_tree(path, None, &Arc::default())
             .unwrap()
             .size_of(0)
+    }
+
+    fn largest_in(root: &Path, limit: usize) -> Vec<LargestFile> {
+        let scan = LargestScan::new(limit);
+        walk_pool().scope(|scope| largest_walk(scope, &scan, root.to_path_buf(), None));
+        scan.snapshot()
     }
 
     /// Runs a scan against `stored` and returns the listing with every size filled in,
@@ -1145,6 +1389,7 @@ mod tests {
                 .iter()
                 .any(|entry| entry.name == "usr-link" && !entry.is_dir && entry.bytes == Some(0))
         );
+        assert!(listed.iter().all(|entry| entry.modified.is_some()));
     }
 
     #[test]
@@ -1185,6 +1430,7 @@ mod tests {
                 links,
                 dev,
                 file_id,
+                ..
             } => {
                 by_id.insert(file_id, (bytes, links, dev));
             }
@@ -1451,6 +1697,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn largest_files_rank_by_size_and_skip_hard_links() {
+        let root = TempDir::new();
+        let nested = root.0.join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(root.0.join("small.bin"), vec![1u8; 8 * 1024]).unwrap();
+        fs::write(root.0.join("medium.bin"), vec![2u8; 64 * 1024]).unwrap();
+        let big = nested.join("big.bin");
+        fs::write(&big, vec![3u8; 256 * 1024]).unwrap();
+        fs::hard_link(&big, root.0.join("big-link.bin")).unwrap();
+
+        let files = largest_in(&root.0, 10);
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert_eq!(files[0].bytes, file_bytes(&big));
+        assert_eq!(files[1].bytes, file_bytes(&root.0.join("medium.bin")));
+        assert_eq!(files[2].bytes, file_bytes(&root.0.join("small.bin")));
+        assert!(
+            files[0].name == "big.bin" || files[0].name == "big-link.bin",
+            "hard links should appear once, got {:?}",
+            files[0]
+        );
+
+        let top = largest_in(&root.0, 2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].bytes, file_bytes(&big));
+        assert_eq!(top[1].bytes, file_bytes(&root.0.join("medium.bin")));
+    }
+
+    #[test]
+    fn largest_event_serializes_for_the_frontend() {
+        let event = LargestEvent::Batch {
+            files: vec![LargestFile {
+                name: "movie.mov".into(),
+                path: "/Users/me/movie.mov".into(),
+                bytes: 123,
+            }],
+            scanned: 12,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["event"], "batch");
+        assert_eq!(json["data"]["scanned"], 12);
+        assert_eq!(json["data"]["files"][0]["name"], "movie.mov");
+        assert_eq!(json["data"]["files"][0]["bytes"], 123);
+
+        let done = serde_json::to_value(LargestEvent::Done { scanned: 12 }).unwrap();
+        assert_eq!(done["event"], "done");
+        assert_eq!(done["data"]["scanned"], 12);
     }
 
     #[test]

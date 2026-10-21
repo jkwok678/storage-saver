@@ -123,6 +123,18 @@ function BrowseView({ initialPath, onPathChange, available }: Props) {
     };
   }, [request]);
 
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // Deferred so a StrictMode remount does not cancel the scan it just started.
+      queueMicrotask(() => {
+        if (!mounted.current && runningInApp()) invoke("stop_scan").catch(() => {});
+      });
+    };
+  }, []);
+
   const open = (next: string) => {
     setRequest({ path: next, refresh: false });
     onPathChange(next);

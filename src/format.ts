@@ -87,5 +87,6 @@ export function kindOf(name: string, isDir: boolean): string {
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return name.startsWith(".") ? "Hidden file" : "Document";
   const extension = name.slice(dot + 1).toLowerCase();
+  if (!extension) return "Document";
   return EXTENSION_KINDS[extension] ?? `${extension.toUpperCase()} file`;
 }

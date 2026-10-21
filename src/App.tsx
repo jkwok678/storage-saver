@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import BrowseView from "./BrowseView";
+import LargestFilesView from "./LargestFilesView";
 import { errorText, formatBytes, runningInApp } from "./format";
 import "./App.css";
 
@@ -10,10 +11,13 @@ type DiskSummary = {
   used: number;
 };
 
+type View = "browse" | "largest";
+
 function App() {
   const [summary, setSummary] = useState<DiskSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [browsePath, setBrowsePath] = useState("/");
+  const [view, setView] = useState<View>("browse");
 
   useEffect(() => {
     if (!runningInApp()) {
@@ -38,7 +42,25 @@ function App() {
   return (
     <main className="app">
       <header className="summary">
-        <h1>Storage</h1>
+        <div className="summary-head">
+          <h1>Storage</h1>
+          <nav className="views" aria-label="Views">
+            <button
+              type="button"
+              aria-pressed={view === "browse"}
+              onClick={() => setView("browse")}
+            >
+              Browse
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "largest"}
+              onClick={() => setView("largest")}
+            >
+              Largest Files
+            </button>
+          </nav>
+        </div>
         {summary ? (
           <>
             <div
@@ -63,11 +85,15 @@ function App() {
         )}
       </header>
 
-      <BrowseView
-        initialPath={browsePath}
-        onPathChange={setBrowsePath}
-        available={summary?.available ?? null}
-      />
+      {view === "browse" ? (
+        <BrowseView
+          initialPath={browsePath}
+          onPathChange={setBrowsePath}
+          available={summary?.available ?? null}
+        />
+      ) : (
+        <LargestFilesView />
+      )}
     </main>
   );
 }

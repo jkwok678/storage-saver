@@ -135,8 +135,14 @@ function LargestFilesView() {
                   <button
                     type="button"
                     className="largest-row"
-                    title={`${file.path}\nDouble-click to show in Finder`}
+                    title={`${file.path}\nDouble-click or press Return to show in Finder`}
                     onDoubleClick={() => reveal(file.path)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        reveal(file.path);
+                      }
+                    }}
                   >
                     <span className="rank">{index + 1}</span>
                     <span className="entry-icon">

@@ -288,6 +288,7 @@ input {
 }
 
 .finder-table tbody tr.selected .modified-cell,
+.finder-table tbody tr.selected .size-cell,
 .finder-table tbody tr.selected .kind-cell,
 .finder-table tbody tr.selected .chevron {
   color: #e8f2ff;

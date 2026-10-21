@@ -409,7 +409,7 @@ fn scan_into(
     };
 
     let mut children = list_children(root)?;
-    children.sort_by_key(|entry| entry.name.to_lowercase());
+    children.sort_by_cached_key(|entry| entry.name.to_lowercase());
     let pending = fill_stored_sizes(stored, root, &mut children, refresh);
 
     if cancelled() {
@@ -705,9 +705,10 @@ fn largest_walk<'s>(
     });
     folders.retain(|name| !is_excluded(&dir.join(name)));
 
-    scan.scanned
-        .fetch_add(files.len() as u64, Ordering::Relaxed);
+    // Count only after ranking, so the reporter never snapshots a count ahead of the heap.
+    let count = files.len() as u64;
     scan.add(&dir, files);
+    scan.scanned.fetch_add(count, Ordering::Relaxed);
     for name in folders {
         let path = dir.join(name);
         scope.spawn(move |scope| largest_walk(scope, scan, path, generation));

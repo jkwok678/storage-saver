@@ -1,9 +1,11 @@
-use jwalk::{DirEntry, Parallelism, WalkDirGeneric};
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::fs::{self, FileType};
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,9 +21,6 @@ static STORED: Mutex<Option<Tree>> = Mutex::new(None);
 const NO_NODE: u32 = u32::MAX;
 const DENIED: u8 = 1;
 const FAILED: u8 = 2;
-
-/// jwalk client state: the node id of the folder being read, and of each entry.
-type NodeIds = (u32, u32);
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,13 +293,6 @@ impl Trouble {
             ErrorKind::PermissionDenied => self.flags |= DENIED,
             ErrorKind::NotFound => {}
             _ => self.fail(err.to_string()),
-        }
-    }
-
-    fn note_walk(&mut self, err: &jwalk::Error) {
-        match err.io_error() {
-            Some(io_error) => self.note_io(io_error),
-            None => self.fail(err.to_string()),
         }
     }
 
@@ -659,148 +651,283 @@ fn measure_tree(
     }
 
     let mut tree = Tree::new(path.to_path_buf());
-    let mut trouble = Trouble::default();
-    let mut walkable = false;
     match fs::symlink_metadata(path) {
-        // jwalk records an unreadable root on the root entry. Checking first keeps that simple.
-        Ok(metadata) if is_real_dir(&metadata.file_type()) => match fs::read_dir(path) {
-            Ok(_) => walkable = true,
-            Err(err) => trouble.note_io(&err),
-        },
+        Ok(metadata) if is_real_dir(&metadata.file_type()) => {}
         Ok(metadata) => {
             if metadata.is_file() {
                 tree.nodes[0].own = allocated_bytes(&metadata);
             }
+            tree.roll_up();
+            return Ok(tree);
         }
-        Err(err) => trouble.note_io(&err),
-    }
-    if !walkable {
-        tree.note(0, trouble);
-        tree.roll_up();
-        return Ok(tree);
-    }
-
-    let shared = Arc::new(Mutex::new(tree));
-    let walk = WalkDirGeneric::<NodeIds>::new(path)
-        .skip_hidden(false)
-        .follow_links(false)
-        .parallelism(Parallelism::RayonExistingPool {
-            pool: walk_pool(),
-            // Callers wait on std threads, not this pool, so a busy pool should queue
-            // instead of aborting the walk.
-            busy_timeout: None,
-        })
-        .process_read_dir({
-            let shared = shared.clone();
-            let links = links.clone();
-            move |depth, _dir, dir_id, children| {
-                record_dir(&shared, &links, generation, depth, *dir_id, children);
-            }
-        });
-
-    // File sizes are added up on the walk pool in `record_dir`. This loop only drains
-    // the walk, which now yields folders alone, and notes folders that could not be read.
-    for entry in walk {
-        if generation.is_some_and(scan_cancelled) {
-            return Err(Cancelled);
+        Err(err) => {
+            let mut trouble = Trouble::default();
+            trouble.note_io(&err);
+            tree.note(0, trouble);
+            tree.roll_up();
+            return Ok(tree);
         }
-        let mut trouble = Trouble::default();
-        let id = match &entry {
-            Ok(entry) => {
-                match entry
-                    .read_children
-                    .as_ref()
-                    .and_then(|children| children.error())
-                {
-                    Some(err) => trouble.note_walk(err),
-                    None => continue,
-                }
-                entry.client_state
-            }
-            Err(err) => {
-                trouble.note_walk(err);
-                0
-            }
-        };
-        lock(&shared).note(id, trouble);
     }
 
-    let mut tree = std::mem::replace(&mut *lock(&shared), Tree::new(PathBuf::new()));
+    let walk = Walk {
+        tree: Mutex::new(tree),
+        links: links.clone(),
+        generation,
+    };
+    walk_pool().scope(|scope| visit(scope, &walk, path.to_path_buf(), 0));
+    if walk.cancelled() {
+        return Err(Cancelled);
+    }
+    let mut tree = walk
+        .tree
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     tree.roll_up();
     Ok(tree)
 }
 
-/// Runs on the walk pool once per folder read. Adds the folder's files into its node,
-/// then gives each subfolder a node of its own so its read knows where to add.
-fn record_dir(
-    tree: &Mutex<Tree>,
-    links: &Mutex<HashSet<(u64, u64)>>,
+/// What every folder read in one walk shares.
+struct Walk {
+    tree: Mutex<Tree>,
+    links: Arc<Mutex<HashSet<(u64, u64)>>>,
     generation: Option<u64>,
-    depth: Option<usize>,
-    dir_id: u32,
-    children: &mut Vec<jwalk::Result<DirEntry<NodeIds>>>,
-) {
-    if generation.is_some_and(scan_cancelled) {
-        children.clear();
-        return;
+}
+
+impl Walk {
+    fn cancelled(&self) -> bool {
+        self.generation.is_some_and(scan_cancelled)
     }
-    // The walk root arrives alone, before any folder is read. It is node 0.
-    if depth.is_none() {
-        for entry in children.iter_mut().flatten() {
-            set_node(entry, 0);
-        }
+}
+
+/// Runs on the walk pool once per folder. Adds the folder's files into its node, gives
+/// each subfolder a node, and queues the subfolders as tasks of their own.
+fn visit<'s>(scope: &rayon::Scope<'s>, walk: &'s Walk, dir: PathBuf, id: u32) {
+    if walk.cancelled() {
         return;
     }
 
     let mut own = 0u64;
     let mut trouble = Trouble::default();
-    children.retain(|child| {
-        let entry = match child {
-            Ok(entry) => entry,
-            Err(err) => {
-                trouble.note_walk(err);
-                return false;
-            }
-        };
-        if is_real_dir(&entry.file_type) {
-            return !is_excluded(&entry.path());
-        }
-        if entry.file_type.is_file() {
-            match entry.metadata() {
-                Ok(metadata) => {
-                    let repeat = metadata.nlink() > 1
-                        && !lock(links).insert((metadata.dev(), metadata.ino()));
-                    if !repeat {
-                        own = own.saturating_add(allocated_bytes(&metadata));
-                    }
-                }
-                Err(err) => trouble.note_walk(&err),
+    let mut folders = Vec::new();
+    let read = read_dir_bulk(&dir, |entry| match entry {
+        BulkEntry::File {
+            bytes,
+            links,
+            dev,
+            file_id,
+        } => {
+            let repeat = links > 1 && !lock(&walk.links).insert((dev, file_id));
+            if !repeat {
+                own = own.saturating_add(bytes);
             }
         }
-        // Files are counted. Only folders go on to the walk.
-        false
+        BulkEntry::Folder(name) => folders.push(name),
+        BulkEntry::Other => {}
+        BulkEntry::Error(errno) => trouble.note_io(&io::Error::from_raw_os_error(errno)),
     });
+    if let Err(err) = read {
+        trouble.note_io(&err);
+    }
+    folders.retain(|name| !is_excluded(&dir.join(name)));
 
-    let names: Vec<Box<str>> = children
-        .iter()
-        .flatten()
-        .map(|entry| entry.file_name.to_string_lossy().into())
-        .collect();
-    let mut tree = lock(tree);
-    let node = &mut tree.nodes[dir_id as usize];
-    node.own = node.own.saturating_add(own);
-    tree.note(dir_id, trouble);
-    for (entry, name) in children.iter_mut().flatten().zip(names) {
-        let id = tree.add_child(dir_id, name);
-        set_node(entry, id);
+    let ids: Vec<u32> = {
+        let mut tree = lock(&walk.tree);
+        let node = &mut tree.nodes[id as usize];
+        node.own = node.own.saturating_add(own);
+        tree.note(id, trouble);
+        folders
+            .iter()
+            .map(|name| tree.add_child(id, name.as_str().into()))
+            .collect()
+    };
+    for (name, child) in folders.into_iter().zip(ids) {
+        let path = dir.join(name);
+        scope.spawn(move |scope| visit(scope, walk, path, child));
     }
 }
 
-fn set_node(entry: &mut DirEntry<NodeIds>, id: u32) {
-    entry.client_state = id;
-    if let Some(read_children) = entry.read_children.as_mut() {
-        read_children.client_read_state = Some(id);
+/// One entry from `getattrlistbulk`.
+enum BulkEntry {
+    File {
+        bytes: u64,
+        links: u32,
+        dev: u64,
+        file_id: u64,
+    },
+    Folder(String),
+    /// Links, sockets and the like. They take no space of their own worth counting.
+    Other,
+    Error(i32),
+}
+
+// Not in the libc crate. Values from <sys/attr.h> and <sys/vnode.h>.
+const ATTR_CMN_ERROR: u32 = 0x2000_0000;
+const VREG: u32 = 1;
+const VDIR: u32 = 2;
+
+const BULK_COMMON: u32 = libc::ATTR_CMN_RETURNED_ATTRS
+    | libc::ATTR_CMN_NAME
+    | libc::ATTR_CMN_DEVID
+    | libc::ATTR_CMN_OBJTYPE
+    | libc::ATTR_CMN_FILEID
+    | ATTR_CMN_ERROR;
+const BULK_FILE: u32 = libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE;
+
+thread_local! {
+    /// Reused across reads. `u64` keeps it 8-byte aligned.
+    static BULK_BUFFER: RefCell<Vec<u64>> = RefCell::new(vec![0; 64 * 1024 / 8]);
+}
+
+/// List `dir` with `getattrlistbulk`. One call returns the type, allocated size, link count
+/// and file id of a whole batch of entries, so files cost no `lstat` of their own.
+fn read_dir_bulk(dir: &Path, mut each: impl FnMut(BulkEntry)) -> io::Result<()> {
+    let path = CString::new(dir.as_os_str().as_bytes())
+        .map_err(|err| io::Error::new(ErrorKind::InvalidInput, err))?;
+    // SAFETY: path is a valid C string.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: fd was just opened and nothing else owns it.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+
+    let mut request = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: BULK_COMMON,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: BULK_FILE,
+        forkattr: 0,
+    };
+    BULK_BUFFER.with_borrow_mut(|buffer| {
+        let size = buffer.len() * 8;
+        loop {
+            // SAFETY: request and buffer outlive the call, and `size` is the buffer's length in bytes.
+            let count = unsafe {
+                libc::getattrlistbulk(
+                    fd.as_raw_fd(),
+                    (&raw mut request).cast(),
+                    buffer.as_mut_ptr().cast(),
+                    size,
+                    0,
+                )
+            };
+            if count < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(err);
+            }
+            if count == 0 {
+                return Ok(());
+            }
+            // SAFETY: the buffer is `size` initialized bytes, and u8 has no alignment needs.
+            let bytes = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), size) };
+            let mut offset = 0;
+            for _ in 0..count {
+                let length = read_u32(bytes, offset).unwrap_or(0) as usize;
+                let Some(entry) = bytes.get(offset..offset + length).filter(|_| length > 0) else {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "getattrlistbulk returned a malformed entry",
+                    ));
+                };
+                if let Some(entry) = parse_bulk_entry(entry) {
+                    each(entry);
+                }
+                offset += length;
+            }
+        }
+    })
+}
+
+/// Attributes follow the entry's length and returned-attribute set, in bit order,
+/// each 4-byte aligned. Ones the file system did not return are left out.
+fn parse_bulk_entry(entry: &[u8]) -> Option<BulkEntry> {
+    let mut at = 4;
+    let take_u32 = |at: &mut usize| {
+        let value = read_u32(entry, *at);
+        *at += 4;
+        value
+    };
+    let common = take_u32(&mut at)?;
+    let _volume = take_u32(&mut at)?;
+    let _dir = take_u32(&mut at)?;
+    let file = take_u32(&mut at)?;
+    let _fork = take_u32(&mut at)?;
+
+    let mut name: &[u8] = &[];
+    if common & libc::ATTR_CMN_NAME != 0 {
+        // attrreference_t: offset from the reference itself, then length with the NUL.
+        let reference = at;
+        let offset = read_u32(entry, at)? as i32;
+        let length = read_u32(entry, at + 4)? as usize;
+        at += 8;
+        let start = reference.checked_add_signed(offset as isize)?;
+        name = entry.get(start..start + length)?;
+        name = name.strip_suffix(&[0]).unwrap_or(name);
+    }
+    let dev = if common & libc::ATTR_CMN_DEVID != 0 {
+        take_u32(&mut at)?
+    } else {
+        0
+    };
+    let kind = if common & libc::ATTR_CMN_OBJTYPE != 0 {
+        take_u32(&mut at)?
+    } else {
+        0
+    };
+    let file_id = if common & libc::ATTR_CMN_FILEID != 0 {
+        let value = read_u64(entry, at)?;
+        at += 8;
+        value
+    } else {
+        0
+    };
+    if common & ATTR_CMN_ERROR != 0 {
+        let errno = take_u32(&mut at)?;
+        if errno != 0 {
+            return Some(BulkEntry::Error(errno as i32));
+        }
+    }
+
+    Some(match kind {
+        VDIR => BulkEntry::Folder(String::from_utf8_lossy(name).into_owned()),
+        VREG => {
+            let links = if file & libc::ATTR_FILE_LINKCOUNT != 0 {
+                take_u32(&mut at)?
+            } else {
+                1
+            };
+            let bytes = if file & libc::ATTR_FILE_ALLOCSIZE != 0 {
+                read_u64(entry, at)?
+            } else {
+                0
+            };
+            BulkEntry::File {
+                bytes,
+                links,
+                dev: u64::from(dev),
+                file_id,
+            }
+        }
+        _ => BulkEntry::Other,
+    })
+}
+
+fn read_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_ne_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
+fn read_u64(bytes: &[u8], at: usize) -> Option<u64> {
+    Some(u64::from_ne_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }
 
 /// Allocated space, in bytes. `st_blocks` is reported in 512-byte units.
@@ -808,21 +935,18 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.blocks().saturating_mul(512)
 }
 
-fn walk_pool() -> Arc<jwalk::rayon::ThreadPool> {
-    static POOL: OnceLock<Arc<jwalk::rayon::ThreadPool>> = OnceLock::new();
+fn walk_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         let threads = std::thread::available_parallelism()
             .map(|count| count.get())
             .unwrap_or(4);
-        Arc::new(
-            jwalk::rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .thread_name(|index| format!("storage-scan-{index}"))
-                .build()
-                .expect("storage scan thread pool"),
-        )
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|index| format!("storage-scan-{index}"))
+            .build()
+            .expect("storage scan thread pool")
     })
-    .clone()
 }
 
 fn worker_count(jobs: usize) -> usize {
@@ -1035,6 +1159,141 @@ mod tests {
             // Below the walk root, the denial is noted on the folder's own node.
             assert!(matches!(nested, Some(Err(MeasureError::NotPermitted))));
         }
+    }
+
+    /// Sizes from `getattrlistbulk` must match `lstat`, which is what `du` and Finder's
+    /// "on disk" figure use.
+    fn assert_bulk_matches_lstat(dir: &Path) {
+        let mut by_id = HashMap::new();
+        let mut folders = Vec::new();
+        read_dir_bulk(dir, |entry| match entry {
+            BulkEntry::File {
+                bytes,
+                links,
+                dev,
+                file_id,
+            } => {
+                by_id.insert(file_id, (bytes, links, dev));
+            }
+            BulkEntry::Folder(name) => folders.push(name),
+            BulkEntry::Other => {}
+            BulkEntry::Error(errno) => panic!("entry error {errno} in {dir:?}"),
+        })
+        .unwrap();
+
+        let mut files = HashSet::new();
+        let mut expected_folders = Vec::new();
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let metadata = fs::symlink_metadata(entry.path()).unwrap();
+            if is_real_dir(&metadata.file_type()) {
+                expected_folders.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            files.insert(metadata.ino());
+            let found = by_id.get(&metadata.ino()).copied();
+            let expected = (
+                allocated_bytes(&metadata),
+                metadata.nlink() as u32,
+                metadata.dev() as u32 as u64,
+            );
+            assert_eq!(found, Some(expected), "{:?}", entry.path());
+        }
+        assert_eq!(by_id.len(), files.len(), "{dir:?}");
+        folders.sort();
+        expected_folders.sort();
+        assert_eq!(folders, expected_folders, "{dir:?}");
+    }
+
+    #[test]
+    fn bulk_listing_matches_lstat() {
+        let root = TempDir::new();
+        let dir = &root.0;
+        fs::write(dir.join("plain.bin"), vec![7u8; 300 * 1024]).unwrap();
+        fs::write(dir.join("empty"), b"").unwrap();
+        fs::hard_link(dir.join("plain.bin"), dir.join("linked.bin")).unwrap();
+        symlink("plain.bin", dir.join("link")).unwrap();
+        fs::create_dir(dir.join("folder")).unwrap();
+        fs::create_dir(dir.join("名前 with spaces")).unwrap();
+        let sparse = fs::File::create(dir.join("sparse")).unwrap();
+        sparse.set_len(64 * 1024 * 1024).unwrap();
+        // Long names push entries past any fixed-size assumption.
+        fs::write(dir.join("n".repeat(250)), b"x").unwrap();
+        let fifo = CString::new(dir.join("fifo").as_os_str().as_bytes()).unwrap();
+        // SAFETY: fifo is a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        // Transparently compressed copies report their compressed size to `lstat`.
+        let compressed = dir.join("compressed.txt");
+        let _ = std::process::Command::new("ditto")
+            .args(["--hfsCompression", "/usr/share/dict/words"])
+            .arg(&compressed)
+            .status();
+        let _ = std::process::Command::new("xattr")
+            .args(["-w", "com.apple.ResourceFork", &"r".repeat(5000)])
+            .arg(dir.join("plain.bin"))
+            .status();
+        // Enough entries to need several bulk calls.
+        let many = dir.join("many");
+        fs::create_dir(&many).unwrap();
+        for index in 0..3000 {
+            fs::write(many.join(format!("file-{index:04}")), b"abc").unwrap();
+        }
+
+        assert_bulk_matches_lstat(dir);
+        assert_bulk_matches_lstat(&many);
+        if compressed.exists() {
+            let metadata = fs::symlink_metadata(&compressed).unwrap();
+            assert!(
+                allocated_bytes(&metadata) < metadata.len(),
+                "not compressed"
+            );
+        }
+        assert!(file_bytes(&dir.join("sparse")) < 1024 * 1024);
+    }
+
+    #[test]
+    fn bulk_listing_reports_unreadable_folder() {
+        let err = read_dir_bulk(Path::new("/definitely/not/here"), |_| {}).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
+        let file = TempDir::new();
+        fs::write(file.0.join("f"), b"x").unwrap();
+        assert!(read_dir_bulk(&file.0.join("f"), |_| {}).is_err());
+    }
+
+    /// Compares every folder under real system and home paths against `lstat`.
+    /// Slow, so run by hand: `cargo test --release -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bulk_listing_matches_lstat_on_real_folders() {
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let mut checked = 0;
+        for root in [
+            PathBuf::from("/Applications"),
+            PathBuf::from("/System/Library/Frameworks"),
+            home.join("Library/Caches"),
+            home.join("projects"),
+        ] {
+            let mut stack = vec![root];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|kind| is_real_dir(&kind)) {
+                        stack.push(entry.path());
+                    }
+                }
+                // Files can change between the two listings in live folders. Skip a mismatch only there.
+                let check = std::panic::catch_unwind(|| assert_bulk_matches_lstat(&dir));
+                if check.is_err() && !dir.starts_with(home.join("Library/Caches")) {
+                    panic!("mismatch in {dir:?}");
+                }
+                checked += 1;
+            }
+        }
+        eprintln!("checked {checked} folders");
     }
 
     #[test]

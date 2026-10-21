@@ -17,7 +17,7 @@ type Entry = {
 };
 
 type ScanEvent =
-  | { event: "started"; data: { entries: Array<Omit<Entry, "bytes" | "error">> } }
+  | { event: "started"; data: { entries: Entry[] } }
   | { event: "sized"; data: { path: string; bytes: number; error: string | null } }
   | { event: "done" };
 
@@ -91,7 +91,9 @@ function layoutEntries(entries: Entry[]): { rows: Entry[]; smaller: Entry[] } {
 function App() {
   const [summary, setSummary] = useState<DiskSummary | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
-  const [path, setPath] = useState("/");
+  // `refresh` walks the folder again instead of reading totals stored by an earlier scan.
+  const [request, setRequest] = useState({ path: "/", refresh: false });
+  const path = request.path;
   const [entries, setEntries] = useState<Entry[]>([]);
   const [scanning, setScanning] = useState(true);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -150,13 +152,7 @@ function App() {
     channel.onmessage = (message) => {
       if (scanGen.current !== gen) return;
       if (message.event === "started") {
-        setEntries(
-          message.data.entries.map((entry) => ({
-            ...entry,
-            bytes: null,
-            error: null,
-          })),
-        );
+        setEntries(message.data.entries);
         return;
       }
       if (message.event === "sized") {
@@ -172,7 +168,7 @@ function App() {
     };
 
     let active = true;
-    invoke("scan_directory", { path, onEvent: channel })
+    invoke("scan_directory", { path: request.path, refresh: request.refresh, onEvent: channel })
       .then(() => {
         if (active && scanGen.current === gen) setScanning(false);
       })
@@ -187,7 +183,9 @@ function App() {
       active = false;
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [path]);
+  }, [request]);
+
+  const open = (next: string) => setRequest({ path: next, refresh: false });
 
   const crumbs = breadcrumbs(path);
   const { rows, smaller } = useMemo(() => layoutEntries(entries), [entries]);
@@ -243,22 +241,31 @@ function App() {
               {crumb.path === path ? (
                 <span className="current">{crumb.label}</span>
               ) : (
-                <button type="button" onClick={() => setPath(crumb.path)}>
+                <button type="button" onClick={() => open(crumb.path)}>
                   {crumb.label}
                 </button>
               )}
             </span>
           ))}
         </nav>
-        <p className="status">
-          {scanError
-            ? scanError
-            : scanning
-              ? entries.length === 0
-                ? "Reading this folder…"
-                : `Measuring ${measuredCount} of ${entries.length}`
-              : `${entries.length} ${entries.length === 1 ? "item" : "items"}`}
-        </p>
+        <div className="actions">
+          <p className="status">
+            {scanError
+              ? scanError
+              : scanning
+                ? entries.length === 0
+                  ? "Reading this folder…"
+                  : `Measuring ${measuredCount} of ${entries.length}`
+                : `${entries.length} ${entries.length === 1 ? "item" : "items"}`}
+          </p>
+          <button
+            type="button"
+            className="refresh"
+            onClick={() => setRequest({ path, refresh: true })}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <ul className="list">
@@ -285,7 +292,7 @@ function App() {
           return (
             <li key={entry.path}>
               {openable ? (
-                <button type="button" className="row" onClick={() => setPath(entry.path)}>
+                <button type="button" className="row" onClick={() => open(entry.path)}>
                   {body}
                 </button>
               ) : (

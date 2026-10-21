@@ -68,6 +68,25 @@ input {
   align-items: baseline;
 }
 
+.actions {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+
+.refresh {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0a84ff;
+  cursor: pointer;
+}
+
+.refresh:hover {
+  text-decoration: underline;
+}
+
 .crumbs {
   display: flex;
   flex-wrap: wrap;

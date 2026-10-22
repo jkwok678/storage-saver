@@ -1,9 +1,25 @@
-import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { errorText, runningInApp } from "./format";
-import type { AiProviderId, AiProviderStatus } from "./aiProviders";
+import { useEffect, useRef, useState } from "react";
 import { DEFAULT_LABEL, type EffortChoice, type ModelChoice } from "./aiModels";
+import type { AiProviderId, AiProviderStatus } from "./aiProviders";
 import type { AiQueryEvent, ChatMessage } from "./aiTypes";
+import { errorText, runningInApp } from "./format";
+
+/** Names the model and effort a reply used, leaving out the CLI defaults. */
+function replyModelLabel(model: ModelChoice | undefined, effort: EffortChoice | null) {
+  if (!model) return undefined;
+  const label = [model.label, effort?.label]
+    .filter((part) => part && part !== DEFAULT_LABEL)
+    .join(" · ");
+  return label || undefined;
+}
+
+/** Failed and stopped replies are not answers, so the AI should not build on them. */
+function history(messages: ChatMessage[]) {
+  return messages
+    .filter((m) => m.role === "user" || (!m.outcome && m.content.trim()))
+    .map((m) => ({ role: m.role, content: m.content }));
+}
 
 type ChatOptions = {
   provider: AiProviderId;
@@ -50,11 +66,6 @@ export function useAiChat({
     }
 
     const providerName = activeProvider.name;
-    const modelLabel = modelChoice
-      ? [modelChoice.label, effortChoice?.label]
-          .filter((label) => label && label !== DEFAULT_LABEL)
-          .join(" · ")
-      : "";
     const seq = ++nextMessageId.current;
     const userMsg: ChatMessage = {
       id: `u-${seq}`,
@@ -68,17 +79,11 @@ export function useAiChat({
       role: "assistant",
       content: "",
       providerName,
-      modelLabel: modelLabel || undefined,
+      modelLabel: replyModelLabel(modelChoice, effortChoice),
       recommendations: [],
     };
 
-    // Failed and stopped replies are not answers, so the AI should not build on them.
-    const historyPayload = messages
-      .filter((m) => m.role === "user" || (!m.outcome && m.content.trim()))
-      .map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+    const historyPayload = history(messages);
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setInput("");
@@ -89,33 +94,27 @@ export function useAiChat({
     const gen = ++queryGen.current;
     pendingReplyId.current = assistantMsgId;
 
+    const updateReply = (update: (reply: ChatMessage) => ChatMessage) =>
+      setMessages((prev) => prev.map((m) => (m.id === assistantMsgId ? update(m) : m)));
+
     const channel = new Channel<AiQueryEvent>();
     channel.onmessage = (event) => {
       if (queryGen.current !== gen) return;
       if (event.event === "status") {
         setStatusMessage(event.data.message);
-      } else if (event.event === "chunk") {
-        setStatusMessage(null);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, content: event.data.text } : m,
-          ),
-        );
-      } else if (event.event === "done") {
-        setStatusMessage(null);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? {
-                  ...m,
-                  content: event.data.answer,
-                  recommendations: event.data.recommendations,
-                }
-              : m,
-          ),
-        );
-        setQuerying(false);
+        return;
       }
+      setStatusMessage(null);
+      if (event.event === "chunk") {
+        updateReply((m) => ({ ...m, content: event.data.text }));
+        return;
+      }
+      updateReply((m) => ({
+        ...m,
+        content: event.data.answer,
+        recommendations: event.data.recommendations,
+      }));
+      setQuerying(false);
     };
 
     try {
@@ -138,17 +137,11 @@ export function useAiChat({
         setQueryError(errStr);
         setQuerying(false);
         setStatusMessage(null);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? {
-                  ...m,
-                  content: m.content || `Could not query ${providerName}: ${errStr}`,
-                  outcome: "error",
-                }
-              : m,
-          ),
-        );
+        updateReply((m) => ({
+          ...m,
+          content: m.content || `Could not query ${providerName}: ${errStr}`,
+          outcome: "error",
+        }));
       }
     }
   };
@@ -158,9 +151,7 @@ export function useAiChat({
     setQuerying(false);
     setStatusMessage(null);
     const stoppedId = pendingReplyId.current;
-    setMessages((prev) =>
-      prev.map((m) => (m.id === stoppedId ? { ...m, outcome: "stopped" } : m)),
-    );
+    setMessages((prev) => prev.map((m) => (m.id === stoppedId ? { ...m, outcome: "stopped" } : m)));
     if (runningInApp()) {
       invoke("stop_ai_query").catch(() => {});
     }
@@ -172,5 +163,17 @@ export function useAiChat({
     setStatusMessage(null);
   };
 
-  return { messages, input, setInput, querying, statusMessage, queryError, sendMessage, stop, clear };
+  return {
+    messages,
+    input,
+    setInput,
+    querying,
+    statusMessage,
+    queryError,
+    sendMessage,
+    stop,
+    clear,
+  };
 }
+
+export type AiChat = ReturnType<typeof useAiChat>;

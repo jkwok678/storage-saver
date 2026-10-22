@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { errorText, runningInApp } from "./format";
+import { useState } from "react";
 import type { TrashOutcome } from "./aiTypes";
+import { errorText, runningInApp } from "./format";
 
 /** Reveal and move-to-Trash state for the recommended items. */
 export function useTrash(onItemTrashed?: (path: string, freedBytes: number) => void) {

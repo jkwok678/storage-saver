@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AiAdvisorPanel } from "./AiAdvisorPanel";
-import { useAiProviders } from "./aiProviders";
+import { type AiProviders, useAiProviders } from "./aiProviders";
 import BrowseView from "./BrowseView";
 import { formatBytes, type TrashedItem } from "./format";
 import { GearIcon, SparklesIcon } from "./icons";
@@ -29,31 +29,27 @@ function App() {
   const [aiStarted, setAiStarted] = useState(false);
   const [trashed, setTrashed] = useState<TrashedItem | null>(null);
   const ai = useAiProviders();
+  const { refresh: refreshAi, load: loadAi } = ai;
 
   // Accounts may have changed in the terminal since the last look.
   useEffect(() => {
-    if (view === "settings") ai.refresh();
-  }, [view]);
+    if (view === "settings") refreshAi();
+  }, [view, refreshAi]);
 
   useEffect(() => {
-    if (aiStarted) ai.load();
-  }, [aiStarted]);
+    if (aiStarted) loadAi();
+  }, [aiStarted, loadAi]);
 
-  // ⌘, opens Settings, as in other Mac apps.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey && event.key === ",") {
-        event.preventDefault();
-        setView("settings");
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  useSettingsShortcut(() => setView("settings"));
 
   const handleItemTrashed = (path: string) => {
     refreshSummary();
     setTrashed((prev) => ({ path, seq: (prev?.seq ?? 0) + 1 }));
+  };
+
+  const toggleAi = () => {
+    setAiStarted(true);
+    setAiOpen(!aiOpen);
   };
 
   return (
@@ -61,65 +57,21 @@ function App() {
       <header className="summary">
         <div className="summary-head">
           <h1>Storage</h1>
-          <div className="header-controls">
-            <nav className="views" aria-label="Views">
-              {VIEWS.map(({ key, label }) => (
-                <button
-                  key={key}
-                  type="button"
-                  aria-pressed={view === key}
-                  onClick={() => setView(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
-            <button
-              type="button"
-              className={`ai-toggle-btn ${aiOpen ? "active" : ""}`}
-              aria-pressed={aiOpen}
-              onClick={() => {
-                setAiStarted(true);
-                setAiOpen(!aiOpen);
-              }}
-              title={aiOpen ? "Collapse AI Advisor" : "Open AI Advisor"}
-            >
-              <SparklesIcon />
-              <span>AI Advisor</span>
-            </button>
-            <button
-              type="button"
-              className="settings-toggle-btn"
-              aria-pressed={view === "settings"}
-              aria-label="Settings"
-              onClick={() => setView(view === "settings" ? "browse" : "settings")}
-              title="Settings (⌘,)"
-            >
-              <GearIcon />
-            </button>
-          </div>
+          <HeaderControls view={view} onView={setView} aiOpen={aiOpen} onToggleAi={toggleAi} />
         </div>
-        {summary ? (
-          <Capacity summary={summary} />
-        ) : (
-          <p className={error ? "error" : "status"}>{error ?? "Reading disk…"}</p>
-        )}
+        <DiskStatus summary={summary} error={error} />
       </header>
 
       <div className={`app-workspace ${aiOpen ? "ai-open" : ""}`}>
         <div className="main-content">
-          {view === "browse" ? (
-            <BrowseView
-              initialPath={browsePath}
-              onPathChange={setBrowsePath}
-              available={summary?.available ?? null}
-              trashed={trashed}
-            />
-          ) : view === "largest" ? (
-            <LargestFilesView trashed={trashed} />
-          ) : (
-            <SettingsView ai={ai} />
-          )}
+          <CurrentView
+            view={view}
+            ai={ai}
+            browsePath={browsePath}
+            onBrowsePath={setBrowsePath}
+            available={summary?.available ?? null}
+            trashed={trashed}
+          />
         </div>
 
         {aiStarted && (
@@ -134,6 +86,90 @@ function App() {
         )}
       </div>
     </main>
+  );
+}
+
+type CurrentViewProps = {
+  view: View;
+  ai: AiProviders;
+  browsePath: string;
+  onBrowsePath: (path: string) => void;
+  available: number | null;
+  trashed: TrashedItem | null;
+};
+
+function CurrentView({ view, ai, browsePath, onBrowsePath, available, trashed }: CurrentViewProps) {
+  if (view === "settings") return <SettingsView ai={ai} />;
+  if (view === "largest") return <LargestFilesView trashed={trashed} />;
+  return (
+    <BrowseView
+      initialPath={browsePath}
+      onPathChange={onBrowsePath}
+      available={available}
+      trashed={trashed}
+    />
+  );
+}
+
+function DiskStatus({ summary, error }: { summary: DiskSummary | null; error: string | null }) {
+  if (summary) return <Capacity summary={summary} />;
+  return <p className={error ? "error" : "status"}>{error ?? "Reading disk…"}</p>;
+}
+
+/** ⌘, opens Settings, as in other Mac apps. */
+function useSettingsShortcut(openSettings: () => void) {
+  const open = useRef(openSettings);
+  open.current = openSettings;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey && event.key === ",") {
+        event.preventDefault();
+        open.current();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+}
+
+type HeaderControlsProps = {
+  view: View;
+  onView: (view: View) => void;
+  aiOpen: boolean;
+  onToggleAi: () => void;
+};
+
+function HeaderControls({ view, onView, aiOpen, onToggleAi }: HeaderControlsProps) {
+  return (
+    <div className="header-controls">
+      <nav className="views" aria-label="Views">
+        {VIEWS.map(({ key, label }) => (
+          <button key={key} type="button" aria-pressed={view === key} onClick={() => onView(key)}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <button
+        type="button"
+        className={`ai-toggle-btn ${aiOpen ? "active" : ""}`}
+        aria-pressed={aiOpen}
+        onClick={onToggleAi}
+        title={aiOpen ? "Collapse AI Advisor" : "Open AI Advisor"}
+      >
+        <SparklesIcon />
+        <span>AI Advisor</span>
+      </button>
+      <button
+        type="button"
+        className="settings-toggle-btn"
+        aria-pressed={view === "settings"}
+        aria-label="Settings"
+        onClick={() => onView(view === "settings" ? "browse" : "settings")}
+        title="Settings (⌘,)"
+      >
+        <GearIcon />
+      </button>
+    </div>
   );
 }
 

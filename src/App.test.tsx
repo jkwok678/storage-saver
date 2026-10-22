@@ -8,6 +8,28 @@ vi.mock("./BrowseView", () => ({
   default: ({ available }: { available: number | null }) => <p>browse {String(available)}</p>,
 }));
 vi.mock("./LargestFilesView", () => ({ default: () => <p>largest</p> }));
+vi.mock("./SettingsView", () => ({ default: () => <p>settings</p> }));
+type PanelProps = {
+  hidden?: boolean;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onItemTrashed?: (path: string, freedBytes: number) => void;
+};
+vi.mock("./AiAdvisorPanel", () => ({
+  AiAdvisorPanel: ({ hidden, onClose, onOpenSettings, onItemTrashed }: PanelProps) => (
+    <aside hidden={hidden}>
+      <button type="button" onClick={onClose}>
+        close panel
+      </button>
+      <button type="button" onClick={onOpenSettings}>
+        open settings
+      </button>
+      <button type="button" onClick={() => onItemTrashed?.("/a", 0)}>
+        trash item
+      </button>
+    </aside>
+  ),
+}));
 
 const GB = 1024 ** 3;
 const refresh = vi.fn();
@@ -57,5 +79,31 @@ describe("App", () => {
     expect(screen.getByText("largest")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     expect(screen.getByText(/^browse/)).toBeTruthy();
+  });
+
+  it("opens Settings from the gear, the panel and ⌘,", () => {
+    render(<App />);
+    const gear = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(gear);
+    expect(screen.getByText("settings")).toBeTruthy();
+    fireEvent.click(gear);
+    expect(screen.getByText(/^browse/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(screen.getByText("settings")).toBeTruthy();
+  });
+
+  it("keeps the AI panel mounted once opened and refreshes after a trash", () => {
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "close panel" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: "AI Advisor" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "trash item" }));
+    expect(refresh).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "open settings" }));
+    expect(screen.getByText("settings")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "close panel" }));
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "close panel", hidden: true })).toBeTruthy();
   });
 });

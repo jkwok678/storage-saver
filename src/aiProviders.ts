@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useRef, useState } from "react";
 import { errorText, runningInApp } from "./format";
 
 export type AiProviderId = "claude" | "cursor";
@@ -26,7 +26,7 @@ export function useAiProviders() {
   const [error, setError] = useState<string | null>(null);
   const requested = useRef(false);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     if (!runningInApp()) return;
     requested.current = true;
     setError(null);
@@ -36,12 +36,12 @@ export function useAiProviders() {
         setProviders((prev) => prev ?? []);
         setError(errorText(err));
       });
-  };
+  }, []);
 
   /** Checks the CLIs once; later checks only happen on refresh. */
-  const load = () => {
+  const load = useCallback(() => {
     if (!requested.current) refresh();
-  };
+  }, [refresh]);
 
   const upsert = (updated: AiProviderStatus) => {
     setProviders((prev) => {

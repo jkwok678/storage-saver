@@ -90,8 +90,7 @@ function cursorChoices(models: AiModel[]): ModelChoice[] {
       label: group.label,
       efforts,
       defaultEffort:
-        group.defaultEffort ??
-        (efforts.find((e) => e.label === "Medium") ?? efforts[0]).label,
+        group.defaultEffort ?? (efforts.find((e) => e.label === "Medium") ?? efforts[0]).label,
     };
   });
 }
@@ -99,7 +98,12 @@ function cursorChoices(models: AiModel[]): ModelChoice[] {
 export function modelChoices(provider: AiProviderId, models: AiModel[]): ModelChoice[] {
   if (provider === "cursor") return cursorChoices(models);
   return [
-    { key: "default", label: DEFAULT_LABEL, efforts: claudeEfforts(null), defaultEffort: DEFAULT_LABEL },
+    {
+      key: "default",
+      label: DEFAULT_LABEL,
+      efforts: claudeEfforts(null),
+      defaultEffort: DEFAULT_LABEL,
+    },
     ...models.map((m) => ({
       key: m.id,
       label: m.label,

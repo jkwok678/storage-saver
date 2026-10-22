@@ -1,9 +1,9 @@
 import {
+  type AiProviders,
   findProvider,
   PROVIDER_IDS,
   providerDotClass,
   providerStatusText,
-  type AiProviders,
 } from "./aiProviders";
 import { runningInApp } from "./format";
 
@@ -48,8 +48,9 @@ function SettingsView({ ai }: Props) {
                       {providerStatusText(ai, provider)}
                     </span>
                   </div>
-                  {!ai.checking && provider.installed && (
-                    provider.connected ? (
+                  {!ai.checking &&
+                    provider.installed &&
+                    (provider.connected ? (
                       <button
                         type="button"
                         className="settings-btn"
@@ -68,8 +69,7 @@ function SettingsView({ ai }: Props) {
                       >
                         {isBusy ? "Connecting…" : "Connect"}
                       </button>
-                    )
-                  )}
+                    ))}
                 </li>
               );
             })}

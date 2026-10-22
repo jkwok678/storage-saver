@@ -90,3 +90,8 @@ export function kindOf(name: string, isDir: boolean): string {
   if (!extension) return "Document";
   return EXTENSION_KINDS[extension] ?? `${extension.toUpperCase()} file`;
 }
+
+export function parentPath(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash <= 0 ? "/" : path.slice(0, slash);
+}

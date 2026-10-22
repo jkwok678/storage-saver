@@ -26,3 +26,7 @@ src-tauri/gen
 *.njsproj
 *.sln
 *.sw?
+.fallow/
+
+# Test coverage
+coverage

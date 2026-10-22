@@ -79,15 +79,27 @@ input {
 }
 
 .capacity-track {
+  appearance: none;
+  display: block;
+  width: 100%;
   height: 14px;
+  border: 0;
   border-radius: 999px;
   background: #e1e1e6;
   overflow: hidden;
 }
 
-.capacity-used {
-  height: 100%;
-  border-radius: inherit;
+/* WebKit's meter parts ignore percentage heights, so match the track explicitly. */
+.capacity-track::-webkit-meter-bar {
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.capacity-track::-webkit-meter-optimum-value {
+  height: 14px;
+  border-radius: 999px;
   background: #0a84ff;
 }
 

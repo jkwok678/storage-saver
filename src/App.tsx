@@ -1,43 +1,21 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import BrowseView from "./BrowseView";
+import { formatBytes } from "./format";
 import LargestFilesView from "./LargestFilesView";
-import { errorText, formatBytes, runningInApp } from "./format";
+import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
-
-type DiskSummary = {
-  total: number;
-  available: number;
-  used: number;
-};
 
 type View = "browse" | "largest";
 
+const VIEWS: Array<{ key: View; label: string }> = [
+  { key: "browse", label: "Browse" },
+  { key: "largest", label: "Largest Files" },
+];
+
 function App() {
-  const [summary, setSummary] = useState<DiskSummary | null>(null);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const { summary, error } = useDiskSummary();
   const [browsePath, setBrowsePath] = useState("/");
   const [view, setView] = useState<View>("browse");
-
-  useEffect(() => {
-    if (!runningInApp()) {
-      setSummaryError("Open Storage Saver to read this disk.");
-      return;
-    }
-    let active = true;
-    invoke<DiskSummary>("disk_summary")
-      .then((next) => {
-        if (active) setSummary(next);
-      })
-      .catch((error: unknown) => {
-        if (active) setSummaryError(errorText(error));
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const usedPct = summary && summary.total > 0 ? (summary.used / summary.total) * 100 : 0;
 
   return (
     <main className="app">
@@ -45,43 +23,22 @@ function App() {
         <div className="summary-head">
           <h1>Storage</h1>
           <nav className="views" aria-label="Views">
-            <button
-              type="button"
-              aria-pressed={view === "browse"}
-              onClick={() => setView("browse")}
-            >
-              Browse
-            </button>
-            <button
-              type="button"
-              aria-pressed={view === "largest"}
-              onClick={() => setView("largest")}
-            >
-              Largest Files
-            </button>
+            {VIEWS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={view === key}
+                onClick={() => setView(key)}
+              >
+                {label}
+              </button>
+            ))}
           </nav>
         </div>
         {summary ? (
-          <>
-            <div
-              className="capacity-track"
-              role="meter"
-              aria-valuemin={0}
-              aria-valuemax={summary.total}
-              aria-valuenow={summary.used}
-              aria-label="Boot disk usage"
-            >
-              <div className="capacity-used" style={{ width: `${Math.min(usedPct, 100)}%` }} />
-            </div>
-            <p className="capacity-label">
-              {Math.round(usedPct)}% full · {formatBytes(summary.used)} used ·{" "}
-              {formatBytes(summary.available)} free
-            </p>
-          </>
+          <Capacity summary={summary} />
         ) : (
-          <p className={summaryError ? "error" : "status"}>
-            {summaryError ?? "Reading disk…"}
-          </p>
+          <p className={error ? "error" : "status"}>{error ?? "Reading disk…"}</p>
         )}
       </header>
 
@@ -95,6 +52,25 @@ function App() {
         <LargestFilesView />
       )}
     </main>
+  );
+}
+
+function Capacity({ summary }: { summary: DiskSummary }) {
+  const usedPct = summary.total > 0 ? (summary.used / summary.total) * 100 : 0;
+  return (
+    <>
+      <meter
+        className="capacity-track"
+        min={0}
+        max={summary.total}
+        value={summary.used}
+        aria-label="Boot disk usage"
+      />
+      <p className="capacity-label">
+        {Math.round(usedPct)}% full · {formatBytes(summary.used)} used ·{" "}
+        {formatBytes(summary.available)} free
+      </p>
+    </>
   );
 }
 

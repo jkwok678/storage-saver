@@ -1,6 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
-import { scanStatus } from "../browse/entries";
+import { type Entry, scanStatus } from "../browse/entries";
 import {
   breadcrumbs,
   errorText,
@@ -21,6 +21,58 @@ type Props = {
   available: number | null;
   trashed?: TrashedItem | null;
 };
+
+const OFFLINE_TEXT = "Open Storage Saver to read this disk.";
+
+type StatusInput = {
+  offline: boolean;
+  actionError: string | null;
+  scanning: boolean;
+  rootScanning: boolean;
+  scanError: string | null;
+  rootEntries: Entry[];
+};
+
+function diskMapStatus(s: StatusInput): string {
+  if (s.offline) return OFFLINE_TEXT;
+  if (s.actionError) return s.actionError;
+  if (s.scanning && !s.rootScanning) return "Reading nested folders…";
+  return scanStatus(s.rootEntries, s.rootScanning, s.scanError);
+}
+
+function Crumbs({ path, onNavigate }: { path: string; onNavigate: (path: string) => void }) {
+  return (
+    <nav className="crumbs" aria-label="Folder">
+      {breadcrumbs(path).map((crumb, index) => (
+        <span key={crumb.path} className="crumb">
+          {index > 0 && <span className="sep">/</span>}
+          {crumb.path === path ? (
+            <span className="current">{crumb.label}</span>
+          ) : (
+            <button type="button" onClick={() => onNavigate(crumb.path)}>
+              {crumb.label}
+            </button>
+          )}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+function PanelMessage({
+  offline,
+  scanError,
+  isEmpty,
+}: {
+  offline: boolean;
+  scanError: string | null;
+  isEmpty: boolean;
+}) {
+  if (offline) return <p className="status">{OFFLINE_TEXT}</p>;
+  if (scanError) return <p className="status error">{scanError}</p>;
+  if (isEmpty) return <p className="empty">This folder is empty.</p>;
+  return null;
+}
 
 function DiskMapView({ initialPath, onPathChange, available, trashed }: Props) {
   const [request, setRequest] = useState<ScanRequest>({ path: initialPath, refresh: false });
@@ -57,11 +109,15 @@ function DiskMapView({ initialPath, onPathChange, available, trashed }: Props) {
   const totalBytes = rootTotalBytes(path, rootEntries);
   const isEmpty = !offline && rootEntries.length === 0 && !scanning && !scanError;
 
-  let statusText: string;
-  if (offline) statusText = "Open Storage Saver to read this disk.";
-  else if (actionError) statusText = actionError;
-  else if (scanning && !rootScanning) statusText = "Reading nested folders…";
-  else statusText = scanStatus(rootEntries, rootScanning, scanError);
+  const statusText = diskMapStatus({
+    offline,
+    actionError,
+    scanning,
+    rootScanning,
+    scanError,
+    rootEntries,
+  });
+  const showChart = !offline && !scanError && !isEmpty;
 
   const reveal = (revealPath: string) => {
     revealItemInDir(revealPath).catch((reason: unknown) => setActionError(errorText(reason)));
@@ -70,20 +126,7 @@ function DiskMapView({ initialPath, onPathChange, available, trashed }: Props) {
   return (
     <section className="diskmap">
       <div className="location">
-        <nav className="crumbs" aria-label="Folder">
-          {breadcrumbs(path).map((crumb, index) => (
-            <span key={crumb.path} className="crumb">
-              {index > 0 && <span className="sep">/</span>}
-              {crumb.path === path ? (
-                <span className="current">{crumb.label}</span>
-              ) : (
-                <button type="button" onClick={() => navigate(crumb.path)}>
-                  {crumb.label}
-                </button>
-              )}
-            </span>
-          ))}
-        </nav>
+        <Crumbs path={path} onNavigate={navigate} />
         <div className="actions">
           <p className={`status${actionError ? " error" : ""}`} aria-live="polite">
             {statusText}
@@ -100,13 +143,7 @@ function DiskMapView({ initialPath, onPathChange, available, trashed }: Props) {
       </div>
 
       <div className="diskmap-panel">
-        {offline ? (
-          <p className="status">Open Storage Saver to read this disk.</p>
-        ) : scanError ? (
-          <p className="status error">{scanError}</p>
-        ) : isEmpty ? (
-          <p className="empty">This folder is empty.</p>
-        ) : (
+        {showChart ? (
           <SunburstChart
             rootPath={path}
             nodes={nodes}
@@ -115,6 +152,8 @@ function DiskMapView({ initialPath, onPathChange, available, trashed }: Props) {
             onZoom={navigate}
             onReveal={reveal}
           />
+        ) : (
+          <PanelMessage offline={offline} scanError={scanError} isEmpty={isEmpty} />
         )}
       </div>
     </section>

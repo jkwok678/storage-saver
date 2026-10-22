@@ -48,6 +48,46 @@ type GroupItem = {
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base" });
 
+function sumBytes(entries: Entry[]): number {
+  return entries.reduce((s, e) => s + (e.bytes ?? 0), 0);
+}
+
+function dirItem(d: Entry): GroupItem {
+  const isPending = d.bytes === null && d.error === null;
+  return {
+    id: d.path,
+    name: d.name,
+    path: d.path,
+    kind: "folder",
+    bytes: d.bytes,
+    weight: isPending ? 1 : (d.bytes ?? 0),
+    pending: isPending,
+    isError: d.error !== null,
+  };
+}
+
+function syntheticItem(
+  listingPath: string,
+  kind: Exclude<ArcKind, "folder">,
+  name: string,
+  bytes: number,
+): GroupItem {
+  return {
+    id: `${listingPath}::__${kind}__`,
+    name,
+    path: null,
+    kind,
+    bytes,
+    weight: bytes,
+    pending: false,
+    isError: false,
+  };
+}
+
+function isSmallDir(d: GroupItem, knownTotal: number): boolean {
+  return !d.pending && !d.isError && d.weight / knownTotal < OTHER_THRESHOLD;
+}
+
 function groupListing(
   entries: Entry[],
   listingPath: string,
@@ -57,113 +97,42 @@ function groupListing(
   const dirs = entries.filter((e) => e.isDir);
   const files = entries.filter((e) => !e.isDir);
 
-  const fileBytes = files.reduce((s, f) => s + (f.bytes ?? 0), 0);
+  const fileBytes = sumBytes(files);
   const hasFilesAgg = fileBytes > 0 || (files.length > 0 && dirs.length === 0);
+  const dirItems = dirs.map(dirItem);
 
-  const dirItems: GroupItem[] = dirs.map((d) => {
-    const isPending = d.bytes === null && d.error === null;
-    const weight = isPending ? 1 : (d.bytes ?? 0);
-    return {
-      id: d.path,
-      name: d.name,
-      path: d.path,
-      kind: "folder" as ArcKind,
-      bytes: d.bytes,
-      weight,
-      pending: isPending,
-      isError: d.error !== null,
-    };
-  });
-
-  const dirWeight = dirItems.reduce((s, d) => s + d.weight, 0);
-  const freeWeight = includeFree && available !== null ? available : 0;
-  const knownTotal = dirWeight + fileBytes + freeWeight;
+  const freeBytes = includeFree ? available : null;
+  const freeWeight = freeBytes ?? 0;
+  const knownTotal = dirItems.reduce((s, d) => s + d.weight, 0) + fileBytes + freeWeight;
 
   // All items with actual bytes (no floor), for parentBytes display
-  const bytesTotal = dirs.reduce((s, d) => s + (d.bytes ?? 0), 0) + fileBytes + freeWeight;
+  const bytesTotal = sumBytes(dirs) + fileBytes + freeWeight;
 
   // Handle all-zero: equal sweeps, pending style
   if (knownTotal === 0) {
-    const allItems: GroupItem[] = [...dirItems];
-    if (hasFilesAgg) {
-      allItems.push({
-        id: `${listingPath}::__files__`,
-        name: "Files",
-        path: null,
-        kind: "files",
-        bytes: 0,
-        weight: 1,
-        pending: true,
-        isError: false,
-      });
-    }
-    if (allItems.length === 0) return { items: [], bytesTotal: 0 };
-    for (const item of allItems) {
-      item.weight = 1;
-      item.pending = true;
-    }
-    return { items: allItems, bytesTotal: 0 };
+    const zeroItems = hasFilesAgg
+      ? [...dirItems, syntheticItem(listingPath, "files", "Files", 0)]
+      : dirItems;
+    return {
+      items: zeroItems.map((item) => ({ ...item, weight: 1, pending: true })),
+      bytesTotal: 0,
+    };
   }
 
   // Other grouping: non-pending, non-error dirs below threshold
-  let otherBytes = 0;
-  let otherCount = 0;
-  const remainingDirs: GroupItem[] = [];
+  const smallDirs = dirItems.filter((d) => isSmallDir(d, knownTotal));
+  const items = dirItems
+    .filter((d) => !isSmallDir(d, knownTotal))
+    .sort((a, b) => b.weight - a.weight || collator.compare(a.name, b.name));
 
-  for (const d of dirItems) {
-    if (!d.pending && !d.isError && d.weight / knownTotal < OTHER_THRESHOLD) {
-      otherBytes += d.weight;
-      otherCount++;
-    } else {
-      remainingDirs.push(d);
-    }
+  if (hasFilesAgg) items.push(syntheticItem(listingPath, "files", "Files", fileBytes));
+  if (smallDirs.length > 0) {
+    const otherBytes = smallDirs.reduce((s, d) => s + d.weight, 0);
+    items.push(syntheticItem(listingPath, "other", "Other", otherBytes));
   }
+  if (freeBytes !== null) items.push(syntheticItem(listingPath, "free", "Free space", freeBytes));
 
-  // Sort remaining dirs by weight desc, then name
-  remainingDirs.sort((a, b) => b.weight - a.weight || collator.compare(a.name, b.name));
-
-  const result: GroupItem[] = [...remainingDirs];
-
-  if (hasFilesAgg) {
-    result.push({
-      id: `${listingPath}::__files__`,
-      name: "Files",
-      path: null,
-      kind: "files",
-      bytes: fileBytes,
-      weight: fileBytes,
-      pending: false,
-      isError: false,
-    });
-  }
-
-  if (otherCount > 0) {
-    result.push({
-      id: `${listingPath}::__other__`,
-      name: "Other",
-      path: null,
-      kind: "other",
-      bytes: otherBytes,
-      weight: otherBytes,
-      pending: false,
-      isError: false,
-    });
-  }
-
-  if (includeFree && available !== null) {
-    result.push({
-      id: `${listingPath}::__free__`,
-      name: "Free space",
-      path: null,
-      kind: "free",
-      bytes: available,
-      weight: available,
-      pending: false,
-      isError: false,
-    });
-  }
-
-  return { items: result, bytesTotal };
+  return { items, bytesTotal };
 }
 
 function innerR(depth: number): number {
@@ -178,39 +147,52 @@ function outerR(depth: number): number {
   return hole + (depth + 1) * band - 0.4;
 }
 
-function layoutChildren(
-  listingPath: string,
-  entries: Entry[],
-  startAngle: number,
-  endAngle: number,
-  depth: number,
-  listings: ReadonlyMap<string, Entry[]>,
-  available: number | null,
-  rootPath: string,
-  parentHue: number | null,
-  nodes: LayoutNode[],
-): void {
-  const includeFree =
-    depth === 0 && listingPath === rootPath && listingPath === "/" && available !== null;
-  const { items, bytesTotal } = groupListing(entries, listingPath, includeFree, available);
+type LayoutContext = {
+  listings: ReadonlyMap<string, Entry[]>;
+  rootPath: string;
+  nodes: LayoutNode[];
+};
+
+type Span = {
+  path: string;
+  entries: Entry[];
+  startAngle: number;
+  endAngle: number;
+  depth: number;
+  available: number | null;
+  parentHue: number | null;
+};
+
+function folderHue(item: GroupItem, depth: number, parentHue: number | null): number | null {
+  if (item.kind !== "folder") return null;
+  return depth === 0 ? hueFromName(item.name) : parentHue;
+}
+
+function layoutNested(ctx: LayoutContext, item: GroupItem, span: Omit<Span, "path" | "entries">) {
+  if (item.kind !== "folder" || item.path === null || span.depth >= MAX_RINGS) return;
+  const entries = ctx.listings.get(item.path);
+  if (entries) layoutChildren(ctx, { ...span, path: item.path, entries });
+}
+
+function layoutChildren(ctx: LayoutContext, span: Span): void {
+  const { path, depth, available } = span;
+  const includeFree = depth === 0 && path === ctx.rootPath && path === "/" && available !== null;
+  const { items, bytesTotal } = groupListing(span.entries, path, includeFree, available);
   if (items.length === 0) return;
 
-  const parentSweep = endAngle - startAngle;
+  const parentSweep = span.endAngle - span.startAngle;
   const totalWeight = items.reduce((s, item) => s + item.weight, 0);
   const ir = innerR(depth);
   const or = outerR(depth);
 
-  let angle = startAngle;
+  let angle = span.startAngle;
 
   for (const item of items) {
     const fraction = totalWeight > 0 ? item.weight / totalWeight : 1 / items.length;
-    const sweep = fraction * parentSweep;
-    const end = angle + sweep;
+    const end = angle + fraction * parentSweep;
+    const hue = folderHue(item, depth, span.parentHue);
 
-    const hue: number | null =
-      item.kind === "folder" ? (depth === 0 ? hueFromName(item.name) : parentHue) : null;
-
-    nodes.push({
+    ctx.nodes.push({
       id: item.id,
       name: item.name,
       path: item.path,
@@ -227,23 +209,13 @@ function layoutChildren(
       clickable: item.kind === "folder" && !item.isError,
     });
 
-    if (item.kind === "folder" && item.path !== null && depth + 1 < MAX_RINGS) {
-      const childListing = listings.get(item.path);
-      if (childListing) {
-        layoutChildren(
-          item.path,
-          childListing,
-          angle,
-          end,
-          depth + 1,
-          listings,
-          null,
-          rootPath,
-          hue,
-          nodes,
-        );
-      }
-    }
+    layoutNested(ctx, item, {
+      startAngle: angle,
+      endAngle: end,
+      depth: depth + 1,
+      available: null,
+      parentHue: hue,
+    });
 
     angle = end;
   }
@@ -254,25 +226,22 @@ export function layoutSunburst(input: LayoutInput): LayoutNode[] {
   const rootEntries = listings.get(rootPath);
   if (!rootEntries || rootEntries.length === 0) return [];
 
-  const nodes: LayoutNode[] = [];
-  layoutChildren(
-    rootPath,
-    rootEntries,
-    0,
-    Math.PI * 2,
-    0,
-    listings,
+  const ctx: LayoutContext = { listings, rootPath, nodes: [] };
+  layoutChildren(ctx, {
+    path: rootPath,
+    entries: rootEntries,
+    startAngle: 0,
+    endAngle: Math.PI * 2,
+    depth: 0,
     available,
-    rootPath,
-    null,
-    nodes,
-  );
-  return nodes;
+    parentHue: null,
+  });
+  return ctx.nodes;
 }
 
 /** Sum of all root entry bytes (no floor weight — for display). */
 export function rootTotalBytes(_rootPath: string, entries: Entry[]): number {
-  return entries.reduce((s, e) => s + (e.bytes ?? 0), 0);
+  return sumBytes(entries);
 }
 
 export function percentOfParent(bytes: number, parentBytes: number): string {

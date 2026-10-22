@@ -29,6 +29,23 @@ pub struct AiProviderStatus {
     pub detail: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AiModel {
+    pub id: String,
+    pub label: String,
+}
+
+/// Claude Code resolves these aliases to the latest model of each family.
+const CLAUDE_MODELS: &[(&str, &str)] = &[
+    ("fable", "Fable"),
+    ("opus", "Opus"),
+    ("sonnet", "Sonnet"),
+    ("haiku", "Haiku"),
+];
+
+/// Levels `claude --effort` accepts. Cursor puts the effort in the model id instead.
+const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatTurn {
@@ -127,11 +144,21 @@ pub async fn disconnect_ai_provider(provider: String) -> Result<AiProviderStatus
 }
 
 #[tauri::command]
+pub async fn ai_models(provider: String) -> Result<Vec<AiModel>, String> {
+    match tauri::async_runtime::spawn_blocking(move || list_ai_models(&provider)).await {
+        Ok(result) => result,
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+#[tauri::command]
 pub async fn query_ai(
     provider: String,
     prompt: String,
     current_path: Option<String>,
     history: Vec<ChatTurn>,
+    model: Option<String>,
+    effort: Option<String>,
     on_event: Channel<AiQueryEvent>,
 ) -> Result<(), String> {
     match tauri::async_runtime::spawn_blocking(move || {
@@ -140,6 +167,8 @@ pub async fn query_ai(
             &prompt,
             current_path.as_deref(),
             &history,
+            model.as_deref(),
+            effort.as_deref(),
             on_event,
         )
     })
@@ -499,13 +528,89 @@ fn run_disconnect_provider(provider: &str) -> Result<AiProviderStatus, String> {
     }
 }
 
+fn list_ai_models(provider: &str) -> Result<Vec<AiModel>, String> {
+    match provider {
+        "claude" => Ok(CLAUDE_MODELS
+            .iter()
+            .map(|(id, label)| AiModel {
+                id: (*id).into(),
+                label: (*label).into(),
+            })
+            .collect()),
+        "cursor" => {
+            let binary = find_binary(&["cursor-agent", "agent"]).ok_or_else(|| {
+                "Cursor CLI (`cursor-agent`) was not found. Install Cursor CLI first.".to_string()
+            })?;
+            let output = output_with_timeout(
+                command_with_env(&binary)
+                    .arg("--list-models")
+                    .stdin(Stdio::null()),
+                STATUS_TIMEOUT,
+            )
+            .map_err(|err| format!("Could not list Cursor models: {err}"))?;
+            let models = parse_cursor_models(&String::from_utf8_lossy(&output.stdout));
+            if models.is_empty() {
+                return Err("Cursor did not list any models. Check that you are signed in.".into());
+            }
+            Ok(models)
+        }
+        other => Err(format!("Unknown AI provider: {other}")),
+    }
+}
+
+/// Reads `cursor-agent --list-models`, one `id - Label` per line.
+fn parse_cursor_models(text: &str) -> Vec<AiModel> {
+    text.lines()
+        .filter_map(|line| {
+            // Some labels end in zero-width spaces.
+            let clean: String = line
+                .chars()
+                .filter(|c| !c.is_control() && !matches!(c, '\u{200b}'..='\u{200d}' | '\u{feff}'))
+                .collect();
+            let (id, label) = clean.split_once(" - ")?;
+            let id = id.trim();
+            if !is_model_id(id) {
+                return None;
+            }
+            Some(AiModel {
+                id: id.into(),
+                label: label.split_whitespace().collect::<Vec<_>>().join(" "),
+            })
+        })
+        .collect()
+}
+
+/// A model id goes on the command line, so it must not read as a flag.
+fn is_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-[]=,:".contains(c))
+}
+
 fn run_ai_query(
     provider: &str,
     user_prompt: &str,
     current_path: Option<&str>,
     history: &[ChatTurn],
+    model: Option<&str>,
+    effort: Option<&str>,
     on_event: Channel<AiQueryEvent>,
 ) -> Result<(), String> {
+    let model = model.filter(|m| !m.is_empty());
+    if let Some(model) = model
+        && !is_model_id(model)
+    {
+        return Err(format!("Unknown model: {model}"));
+    }
+    let effort = effort.filter(|e| !e.is_empty());
+    if let Some(effort) = effort
+        && !CLAUDE_EFFORTS.contains(&effort)
+    {
+        return Err(format!("Unknown effort level: {effort}"));
+    }
+
     let generation = AI_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     kill_running_child();
 
@@ -560,6 +665,12 @@ fn run_ai_query(
             if work_dir != home_dir {
                 c.args(["--add-dir", work_dir]);
             }
+            if let Some(model) = model {
+                c.args(["--model", model]);
+            }
+            if let Some(effort) = effort {
+                c.args(["--effort", effort]);
+            }
             c.arg("--").arg(&conversation_prompt);
             c
         }
@@ -586,6 +697,9 @@ fn run_ai_query(
             ]);
             if work_dir != home_dir {
                 c.args(["--add-dir", &home_dir]);
+            }
+            if let Some(model) = model {
+                c.args(["--model", model]);
             }
             c.arg("--").arg(combined);
             c
@@ -1099,6 +1213,40 @@ fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_cursor_model_list() {
+        let listing = "Available models\n\n\
+            auto - Auto (default)\n\
+            claude-opus-5-5-high - Claude Opus 5.5 1M High\n\
+            grok-4.7-low-fast - Grok 4.7  Low Fast\u{200b}\u{200b}\n\
+            --force - not a model\n";
+        assert_eq!(
+            parse_cursor_models(listing),
+            vec![
+                AiModel {
+                    id: "auto".into(),
+                    label: "Auto (default)".into()
+                },
+                AiModel {
+                    id: "claude-opus-5-5-high".into(),
+                    label: "Claude Opus 5.5 1M High".into(),
+                },
+                AiModel {
+                    id: "grok-4.7-low-fast".into(),
+                    label: "Grok 4.7 Low Fast".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn model_ids_cannot_be_flags() {
+        assert!(is_model_id("claude-opus-4-8[context=1m,effort=high]"));
+        assert!(!is_model_id("--dangerously-skip-permissions"));
+        assert!(!is_model_id("opus; rm -rf"));
+        assert!(!is_model_id(""));
+    }
 
     #[test]
     fn extracts_recommendations_fence_and_cleans_answer() {

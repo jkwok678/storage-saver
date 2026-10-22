@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AiAdvisorPanel } from "./AiAdvisorPanel";
+import { useAiProviders } from "./aiProviders";
 import BrowseView from "./BrowseView";
 import { formatBytes, type TrashedItem } from "./format";
-import { SparklesIcon } from "./icons";
+import { GearIcon, SparklesIcon } from "./icons";
 import LargestFilesView from "./LargestFilesView";
+import SettingsView from "./SettingsView";
 import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
 
-type View = "browse" | "largest";
+type View = "browse" | "largest" | "settings";
 
 const VIEWS: Array<{ key: View; label: string }> = [
   { key: "browse", label: "Browse" },
@@ -22,6 +24,28 @@ function App() {
   // Mounted on first open and kept, so closing the panel keeps the conversation.
   const [aiStarted, setAiStarted] = useState(false);
   const [trashed, setTrashed] = useState<TrashedItem | null>(null);
+  const ai = useAiProviders();
+
+  // Accounts may have changed in the terminal since the last look.
+  useEffect(() => {
+    if (view === "settings") ai.refresh();
+  }, [view]);
+
+  useEffect(() => {
+    if (aiStarted) ai.load();
+  }, [aiStarted]);
+
+  // ⌘, opens Settings, as in other Mac apps.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey && event.key === ",") {
+        event.preventDefault();
+        setView("settings");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const handleItemTrashed = (path: string) => {
     refreshSummary();
@@ -59,6 +83,16 @@ function App() {
               <SparklesIcon />
               <span>AI Advisor</span>
             </button>
+            <button
+              type="button"
+              className="settings-toggle-btn"
+              aria-pressed={view === "settings"}
+              aria-label="Settings"
+              onClick={() => setView(view === "settings" ? "browse" : "settings")}
+              title="Settings (⌘,)"
+            >
+              <GearIcon />
+            </button>
           </div>
         </div>
         {summary ? (
@@ -77,16 +111,20 @@ function App() {
               available={summary?.available ?? null}
               trashed={trashed}
             />
-          ) : (
+          ) : view === "largest" ? (
             <LargestFilesView trashed={trashed} />
+          ) : (
+            <SettingsView ai={ai} />
           )}
         </div>
 
         {aiStarted && (
           <AiAdvisorPanel
+            ai={ai}
             hidden={!aiOpen}
             currentPath={browsePath}
             onClose={() => setAiOpen(false)}
+            onOpenSettings={() => setView("settings")}
             onItemTrashed={handleItemTrashed}
           />
         )}

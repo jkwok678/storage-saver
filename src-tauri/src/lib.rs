@@ -15,6 +15,7 @@ pub fn run() {
             ai::ai_providers_status,
             ai::connect_ai_provider,
             ai::disconnect_ai_provider,
+            ai::ai_models,
             ai::query_ai,
             ai::stop_ai_query
         ])

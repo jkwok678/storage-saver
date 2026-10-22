@@ -11,15 +11,20 @@ import {
   TrashIcon,
 } from "./icons";
 import { errorText, formatBytes, isWithin, runningInApp } from "./format";
-
-export type AiProviderStatus = {
-  id: "claude" | "cursor";
-  name: string;
-  installed: boolean;
-  connected: boolean;
-  account?: string | null;
-  detail?: string | null;
-};
+import {
+  findProvider,
+  providerDotClass,
+  providerStatusText,
+  type AiProviderId,
+  type AiProviders,
+} from "./aiProviders";
+import {
+  DEFAULT_LABEL,
+  modelChoices,
+  pickEffort,
+  type AiModel,
+  type ModelChoice,
+} from "./aiModels";
 
 export type AiRecommendation = {
   path: string;
@@ -52,17 +57,48 @@ type ChatMessage = {
   content: string;
   /** Who answered, kept so switching providers does not relabel earlier replies. */
   providerName?: string;
+  modelLabel?: string;
   /** Set when the reply did not finish. Such replies are not sent back as history. */
   outcome?: "error" | "stopped";
   recommendations?: AiRecommendation[];
 };
 
 type Props = {
+  ai: AiProviders;
   currentPath: string;
   hidden?: boolean;
   onClose: () => void;
+  onOpenSettings: () => void;
   onItemTrashed?: (path: string, freedBytes: number) => void;
 };
+
+/** The model (by key) and effort (by label) picked for one provider. */
+type ModelPick = { model: string | null; effort: string | null };
+
+const PICK_KEY = "aiAdvisor.model.";
+
+function readPick(provider: AiProviderId): ModelPick {
+  try {
+    const stored = JSON.parse(localStorage.getItem(PICK_KEY + provider) ?? "null");
+    if (stored && typeof stored === "object") {
+      return {
+        model: typeof stored.model === "string" ? stored.model : null,
+        effort: typeof stored.effort === "string" ? stored.effort : null,
+      };
+    }
+  } catch {
+    // Storage can be missing or blocked; the pickers then start at the defaults.
+  }
+  return { model: null, effort: null };
+}
+
+function savePick(provider: AiProviderId, pick: ModelPick) {
+  try {
+    localStorage.setItem(PICK_KEY + provider, JSON.stringify(pick));
+  } catch {
+    // Not remembering the choice is fine.
+  }
+}
 
 const STARTER_PROMPTS = [
   "What can I safely delete right now to free up space?",
@@ -71,11 +107,21 @@ const STARTER_PROMPTS = [
   "Find developer caches, DerivedData, and build artifacts",
 ];
 
-export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: Props) {
-  const [providers, setProviders] = useState<AiProviderStatus[] | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<"claude" | "cursor">("claude");
-  const [connecting, setConnecting] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+export function AiAdvisorPanel({
+  ai,
+  currentPath,
+  hidden,
+  onClose,
+  onOpenSettings,
+  onItemTrashed,
+}: Props) {
+  const [selectedProvider, setSelectedProvider] = useState<AiProviderId>("claude");
+  const [catalogs, setCatalogs] = useState<Partial<Record<AiProviderId, ModelChoice[]>>>({});
+  const [catalogErrors, setCatalogErrors] = useState<Partial<Record<AiProviderId, string>>>({});
+  const [picks, setPicks] = useState<Record<AiProviderId, ModelPick>>(() => ({
+    claude: readPick("claude"),
+    cursor: readPick("cursor"),
+  }));
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -96,28 +142,17 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
   const queryingRef = useRef(false);
   queryingRef.current = querying;
 
-  const loadProviderStatus = (pickConnected: boolean) => {
-    if (!runningInApp()) return;
-    setAuthError(null);
-    invoke<AiProviderStatus[]>("ai_providers_status")
-      .then((statuses) => {
-        setProviders(statuses);
-        // On first load only: a later refresh must not override the provider the user chose.
-        if (!pickConnected) return;
-        setSelectedProvider((current) => {
-          if (statuses.some((s) => s.id === current && s.connected)) return current;
-          return statuses.find((s) => s.connected)?.id ?? current;
-        });
-      })
-      .catch((err: unknown) => {
-        setProviders((prev) => prev ?? []);
-        setAuthError(errorText(err));
-      });
-  };
-
+  // On the first status only: a later refresh must not override the provider the user chose.
+  const pickedProvider = useRef(false);
   useEffect(() => {
-    loadProviderStatus(true);
-  }, []);
+    const statuses = ai.providers;
+    if (!statuses || pickedProvider.current) return;
+    pickedProvider.current = true;
+    setSelectedProvider((current) => {
+      if (statuses.some((s) => s.id === current && s.connected)) return current;
+      return statuses.find((s) => s.connected)?.id ?? current;
+    });
+  }, [ai.providers]);
 
   // A reply still running when the panel goes away would keep the CLI working for nobody.
   useEffect(
@@ -133,63 +168,38 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
     }
   }, [messages, statusMessage, querying]);
 
-  const checking = runningInApp() && providers === null;
-  const activeProvider: AiProviderStatus = providers?.find((p) => p.id === selectedProvider) ?? {
-    id: selectedProvider,
-    name: selectedProvider === "claude" ? "Claude Code" : "Cursor",
-    installed: !checking,
-    connected: false,
-  };
-  const statusText = !runningInApp()
-    ? "Open Storage Saver to use the AI Advisor"
-    : checking
-      ? "Checking connection…"
-      : activeProvider.connected
-        ? activeProvider.account || activeProvider.detail || "Connected"
-        : activeProvider.installed
-          ? "Not signed in"
-          : `${activeProvider.name} CLI not found`;
+  const activeProvider = findProvider(ai, selectedProvider);
 
-  const upsertProvider = (updated: AiProviderStatus) => {
-    setProviders((prev) => {
-      const list = prev ?? [];
-      return list.some((p) => p.id === updated.id)
-        ? list.map((p) => (p.id === updated.id ? updated : p))
-        : [...list, updated];
-    });
-  };
-
-  const handleConnect = async (providerId: "claude" | "cursor") => {
-    if (!runningInApp()) return;
-    setConnecting(true);
-    setAuthError(null);
-    try {
-      const updated = await invoke<AiProviderStatus>("connect_ai_provider", {
-        provider: providerId,
+  // Cursor's models depend on the account, so they are listed once signed in.
+  const catalogRequested = useRef(new Set<AiProviderId>());
+  useEffect(() => {
+    const id = selectedProvider;
+    if (!runningInApp() || !activeProvider.connected || catalogRequested.current.has(id)) return;
+    catalogRequested.current.add(id);
+    invoke<AiModel[]>("ai_models", { provider: id })
+      .then((models) => {
+        setCatalogs((prev) => ({ ...prev, [id]: modelChoices(id, models) }));
+        setCatalogErrors((prev) => ({ ...prev, [id]: undefined }));
+      })
+      .catch((err: unknown) => {
+        // Let a later visit try again, for example after signing in.
+        catalogRequested.current.delete(id);
+        setCatalogErrors((prev) => ({ ...prev, [id]: errorText(err) }));
       });
-      upsertProvider(updated);
-    } catch (err: unknown) {
-      setAuthError(errorText(err));
-    } finally {
-      setConnecting(false);
-    }
-  };
+  }, [selectedProvider, activeProvider.connected]);
 
-  const handleDisconnect = async (providerId: "claude" | "cursor") => {
-    if (!runningInApp()) return;
-    setConnecting(true);
-    setAuthError(null);
-    try {
-      const updated = await invoke<AiProviderStatus>("disconnect_ai_provider", {
-        provider: providerId,
-      });
-      upsertProvider(updated);
-    } catch (err: unknown) {
-      setAuthError(errorText(err));
-    } finally {
-      setConnecting(false);
-    }
+  const choices = catalogs[selectedProvider];
+  const pick = picks[selectedProvider];
+  const modelChoice = choices?.find((c) => c.key === pick.model) ?? choices?.[0];
+  const effortChoice = modelChoice ? pickEffort(modelChoice, pick.effort) : null;
+
+  const updatePick = (next: ModelPick) => {
+    setPicks((prev) => ({ ...prev, [selectedProvider]: next }));
+    savePick(selectedProvider, next);
   };
+  const statusText = runningInApp()
+    ? providerStatusText(ai, activeProvider)
+    : "Open Storage Saver to use the AI Advisor";
 
   const sendMessage = async (promptText: string) => {
     const trimmed = promptText.trim();
@@ -200,6 +210,11 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
     }
 
     const providerName = activeProvider.name;
+    const modelLabel = modelChoice
+      ? [modelChoice.label, effortChoice?.label]
+          .filter((label) => label && label !== DEFAULT_LABEL)
+          .join(" · ")
+      : "";
     const seq = ++nextMessageId.current;
     const userMsg: ChatMessage = {
       id: `u-${seq}`,
@@ -213,6 +228,7 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
       role: "assistant",
       content: "",
       providerName,
+      modelLabel: modelLabel || undefined,
       recommendations: [],
     };
 
@@ -268,6 +284,8 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
         prompt: trimmed,
         currentPath,
         history: historyPayload,
+        model: effortChoice?.model ?? null,
+        effort: effortChoice?.effort ?? null,
         onEvent: channel,
       });
       if (queryGen.current === gen) {
@@ -376,53 +394,23 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
 
         <div className="ai-auth-status">
           <div className="ai-status-indicator">
-            <span
-              className={`status-dot ${
-                activeProvider.connected
-                  ? "connected"
-                  : activeProvider.installed || checking
-                    ? "disconnected"
-                    : "missing"
-              }`}
-            />
+            <span className={`status-dot ${providerDotClass(ai, activeProvider)}`} />
             <span className="status-text">{statusText}</span>
           </div>
 
           <div className="ai-auth-actions">
-            {!checking && !activeProvider.connected && activeProvider.installed && (
-              <button
-                type="button"
-                className="ai-connect-btn"
-                onClick={() => handleConnect(selectedProvider)}
-                disabled={connecting}
-              >
-                {connecting ? "Connecting…" : "Connect"}
-              </button>
-            )}
-            {activeProvider.connected && (
-              <button
-                type="button"
-                className="ai-text-btn"
-                onClick={() => handleDisconnect(selectedProvider)}
-                disabled={connecting}
-                title={`Signs ${activeProvider.name} out on this Mac, including in the terminal`}
-              >
-                Sign out
-              </button>
-            )}
             <button
               type="button"
               className="ai-text-btn"
-              onClick={() => loadProviderStatus(false)}
-              disabled={connecting}
-              title="Refresh connection status"
+              onClick={onOpenSettings}
+              title="Connect or sign out of accounts in Settings"
             >
-              Refresh
+              {!ai.checking && !activeProvider.connected && activeProvider.installed
+                ? "Connect in Settings"
+                : "Manage accounts"}
             </button>
           </div>
         </div>
-
-        {authError && <p className="ai-error-banner">{authError}</p>}
       </section>
 
       <div className="ai-chat-scroll" ref={scrollRef}>
@@ -460,7 +448,10 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
                   {msg.role === "assistant" && (
                     <div className="ai-bubble-badge">
                       <SparklesIcon />
-                      <span>{msg.providerName ?? activeProvider.name}</span>
+                      <span>
+                        {msg.providerName ?? activeProvider.name}
+                        {msg.modelLabel && ` · ${msg.modelLabel}`}
+                      </span>
                     </div>
                   )}
                   <div className="ai-message-text">{renderMarkdown(msg.content)}</div>
@@ -617,13 +608,8 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
           <div className="ai-error-banner">
             <p>{queryError}</p>
             {!activeProvider.connected && activeProvider.installed && (
-              <button
-                type="button"
-                className="ai-connect-btn"
-                onClick={() => handleConnect(selectedProvider)}
-                disabled={connecting}
-              >
-                Sign in with {activeProvider.name}
+              <button type="button" className="ai-connect-btn" onClick={onOpenSettings}>
+                Sign in to {activeProvider.name} in Settings
               </button>
             )}
           </div>
@@ -656,6 +642,52 @@ export function AiAdvisorPanel({ currentPath, hidden, onClose, onItemTrashed }: 
             )}
           </div>
         )}
+
+        <div className="ai-model-row">
+          <label className="ai-model-field">
+            <span>Model</span>
+            <select
+              value={modelChoice?.key ?? ""}
+              onChange={(e) => updatePick({ model: e.target.value, effort: pick.effort })}
+              disabled={querying || !choices}
+              title={catalogErrors[selectedProvider]}
+            >
+              {choices ? (
+                choices.map((choice) => (
+                  <option key={choice.key} value={choice.key}>
+                    {choice.label}
+                  </option>
+                ))
+              ) : (
+                <option value="">
+                  {catalogErrors[selectedProvider]
+                    ? "Could not list models"
+                    : activeProvider.connected
+                      ? "Loading…"
+                      : "Default"}
+                </option>
+              )}
+            </select>
+          </label>
+          <label className="ai-model-field">
+            <span>Effort</span>
+            <select
+              value={effortChoice?.label ?? ""}
+              onChange={(e) => updatePick({ model: pick.model, effort: e.target.value })}
+              disabled={querying || !modelChoice || modelChoice.efforts.length < 2}
+            >
+              {modelChoice ? (
+                modelChoice.efforts.map((effort) => (
+                  <option key={effort.label} value={effort.label}>
+                    {effort.label}
+                  </option>
+                ))
+              ) : (
+                <option value="">Default</option>
+              )}
+            </select>
+          </label>
+        </div>
 
         <form
           className="ai-input-form"

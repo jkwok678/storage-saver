@@ -1,0 +1,164 @@
+.largest {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.largest-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.largest-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.largest-heading .status {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.largest-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d8d8dd;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.largest-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.largest-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.largest-list li {
+  border-bottom: 1px solid #f0f0f2;
+}
+
+.largest-list li:last-child {
+  border-bottom: 0;
+}
+
+.largest-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2rem 16px minmax(0, 1.5fr) minmax(80px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.largest-row:hover {
+  background: #f0f4fb;
+}
+
+.largest-row:focus-visible {
+  outline: 2px solid #0a84ff;
+  outline-offset: -2px;
+}
+
+.rank {
+  text-align: right;
+  color: #8e8e93;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.largest-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.largest-name .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.largest-name .parent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8e8e93;
+  font-size: 11.5px;
+}
+
+.largest-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #ececf0;
+  overflow: hidden;
+}
+
+.largest-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0a84ff;
+}
+
+.largest-size {
+  min-width: 6.5rem;
+  text-align: right;
+  color: #3a3a3c;
+  font-variant-numeric: tabular-nums;
+}
+
+.largest-empty {
+  padding: 28px 12px;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+  .largest-panel {
+    background: #232326;
+    border-color: #3a3a3c;
+  }
+
+  .largest-list li {
+    border-bottom-color: #2e2e31;
+  }
+
+  .largest-row:hover {
+    background: #2f333d;
+  }
+
+  .rank,
+  .largest-name .parent {
+    color: #8e8e93;
+  }
+
+  .largest-bar {
+    background: #3a3a3c;
+  }
+
+  .largest-size {
+    color: #d1d1d6;
+  }
+}

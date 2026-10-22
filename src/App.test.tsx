@@ -8,18 +8,42 @@ vi.mock("./BrowseView", () => ({
   default: ({ available }: { available: number | null }) => <p>browse {String(available)}</p>,
 }));
 vi.mock("./LargestFilesView", () => ({ default: () => <p>largest</p> }));
+vi.mock("./SettingsView", () => ({ default: () => <p>settings</p> }));
+type PanelProps = {
+  hidden?: boolean;
+  onClose: () => void;
+  onOpenSettings: () => void;
+  onItemTrashed?: (path: string, freedBytes: number) => void;
+};
+vi.mock("./AiAdvisorPanel", () => ({
+  AiAdvisorPanel: ({ hidden, onClose, onOpenSettings, onItemTrashed }: PanelProps) => (
+    <aside hidden={hidden}>
+      <button type="button" onClick={onClose}>
+        close panel
+      </button>
+      <button type="button" onClick={onOpenSettings}>
+        open settings
+      </button>
+      <button type="button" onClick={() => onItemTrashed?.("/a", 0)}>
+        trash item
+      </button>
+    </aside>
+  ),
+}));
 
 const GB = 1024 ** 3;
+const refresh = vi.fn();
 
 describe("App", () => {
   beforeEach(() => {
-    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: null });
+    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: null, refresh });
   });
 
   it("shows disk capacity once the summary loads", () => {
     vi.mocked(useDiskSummary).mockReturnValue({
       summary: { total: 100 * GB, used: 25 * GB, available: 75 * GB },
       error: null,
+      refresh,
     });
     render(<App />);
     const meter = screen.getByRole("meter", { name: "Boot disk usage" });
@@ -32,7 +56,7 @@ describe("App", () => {
     const { rerender } = render(<App />);
     expect(screen.getByText("Reading disk…")).toBeTruthy();
     expect(screen.getByText("browse null")).toBeTruthy();
-    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: "No access" });
+    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: "No access", refresh });
     rerender(<App />);
     expect(screen.getByText("No access").className).toBe("error");
   });
@@ -41,6 +65,7 @@ describe("App", () => {
     vi.mocked(useDiskSummary).mockReturnValue({
       summary: { total: 0, used: 0, available: 0 },
       error: null,
+      refresh,
     });
     render(<App />);
     expect(screen.getByText(/0% full/)).toBeTruthy();
@@ -54,5 +79,31 @@ describe("App", () => {
     expect(screen.getByText("largest")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     expect(screen.getByText(/^browse/)).toBeTruthy();
+  });
+
+  it("opens Settings from the gear, the panel and ⌘,", () => {
+    render(<App />);
+    const gear = screen.getByRole("button", { name: "Settings" });
+    fireEvent.click(gear);
+    expect(screen.getByText("settings")).toBeTruthy();
+    fireEvent.click(gear);
+    expect(screen.getByText(/^browse/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(screen.getByText("settings")).toBeTruthy();
+  });
+
+  it("keeps the AI panel mounted once opened and refreshes after a trash", () => {
+    render(<App />);
+    expect(screen.queryByRole("button", { name: "close panel" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: "AI Advisor" });
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "trash item" }));
+    expect(refresh).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "open settings" }));
+    expect(screen.getByText("settings")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "close panel" }));
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "close panel", hidden: true })).toBeTruthy();
   });
 });

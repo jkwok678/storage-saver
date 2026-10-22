@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type Entry,
   itemCount,
@@ -9,7 +9,15 @@ import {
   sizeText,
   sortEntries,
 } from "./entries";
-import { breadcrumbs, formatBytes, formatDate, kindOf } from "./format";
+import {
+  breadcrumbs,
+  formatBytes,
+  formatDate,
+  isWithin,
+  kindOf,
+  parentPath,
+  type TrashedItem,
+} from "./format";
 import { FileIcon, FolderIcon } from "./icons";
 import { type ScanRequest, useDirectoryScan } from "./useDirectoryScan";
 
@@ -17,6 +25,7 @@ type Props = {
   initialPath: string;
   onPathChange: (path: string) => void;
   available: number | null;
+  trashed?: TrashedItem | null;
 };
 
 const COLUMNS: Array<{ key: SortKey; label: string }> = [
@@ -26,7 +35,7 @@ const COLUMNS: Array<{ key: SortKey; label: string }> = [
   { key: "kind", label: "Kind" },
 ];
 
-function BrowseView({ initialPath, onPathChange, available }: Props) {
+function BrowseView({ initialPath, onPathChange, available, trashed }: Props) {
   const [request, setRequest] = useState<ScanRequest>({ path: initialPath, refresh: false });
   const [sort, setSort] = useState<Sort>({ key: "name", descending: false });
   const [selected, setSelected] = useState<string | null>(null);
@@ -42,6 +51,22 @@ function BrowseView({ initialPath, onPathChange, available }: Props) {
     scan({ path: next, refresh: false });
     onPathChange(next);
   };
+
+  // Only items trashed while this view is open; a remount already reads current totals.
+  const seenTrash = useRef(trashed?.seq);
+  useEffect(() => {
+    if (!trashed || trashed.seq === seenTrash.current) return;
+    seenTrash.current = trashed.seq;
+    if (isWithin(path, trashed.path)) {
+      const parent = parentPath(trashed.path);
+      setSelected(null);
+      setRequest({ path: parent, refresh: false });
+      onPathChange(parent);
+    } else if (isWithin(trashed.path, path)) {
+      // The stored totals already leave the item out, so reading them again needs no walk.
+      setRequest({ path, refresh: false });
+    }
+  }, [trashed, path, onPathChange]);
 
   const rows = useMemo(() => sortEntries(entries, sort), [entries, sort]);
   const selectedEntry = entries.find((entry) => entry.path === selected) ?? null;

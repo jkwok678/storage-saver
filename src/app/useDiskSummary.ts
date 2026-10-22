@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import { errorText, runningInApp } from "./format";
+import { errorText, runningInApp } from "../shared/format";
 
 export type DiskSummary = {
   total: number;

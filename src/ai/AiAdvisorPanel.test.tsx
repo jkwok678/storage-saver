@@ -8,8 +8,8 @@ import { useModelPicker } from "./useModelPicker";
 vi.mock("./useAiChat", () => ({ useAiChat: vi.fn() }));
 vi.mock("./useModelPicker", () => ({ useModelPicker: vi.fn() }));
 const app = vi.hoisted(() => ({ running: true }));
-vi.mock("./format", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./format")>()),
+vi.mock("../shared/format", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/format")>()),
   runningInApp: () => app.running,
 }));
 

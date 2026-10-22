@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  breadcrumbs,
+  formatBytes,
+  formatDate,
+  isWithin,
+  kindOf,
+  parentPath,
+  type TrashedItem,
+} from "../shared/format";
+import { FileIcon, FolderIcon } from "../shared/icons";
+import {
   type Entry,
   itemCount,
   nextSort,
@@ -9,17 +19,8 @@ import {
   sizeText,
   sortEntries,
 } from "./entries";
-import {
-  breadcrumbs,
-  formatBytes,
-  formatDate,
-  isWithin,
-  kindOf,
-  parentPath,
-  type TrashedItem,
-} from "./format";
-import { FileIcon, FolderIcon } from "./icons";
 import { type ScanRequest, useDirectoryScan } from "./useDirectoryScan";
+import "./browse.css";
 
 type Props = {
   initialPath: string;

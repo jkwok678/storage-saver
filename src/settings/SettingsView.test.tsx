@@ -1,10 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AiProviders } from "./aiProviders";
+import type { AiProviders } from "../ai/aiProviders";
 import SettingsView from "./SettingsView";
 
-vi.mock("./format", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./format")>()),
+vi.mock("../shared/format", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/format")>()),
   runningInApp: () => true,
 }));
 

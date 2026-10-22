@@ -1,8 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import { errorText, runningInApp } from "../shared/format";
+import { useStopOnUnmount } from "../shared/useStopOnUnmount";
 import type { Entry } from "./entries";
-import { errorText, runningInApp } from "./format";
-import { useStopOnUnmount } from "./useStopOnUnmount";
 
 type SizeUpdate = { path: string; bytes: number; error: string | null };
 

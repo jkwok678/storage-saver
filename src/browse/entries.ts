@@ -1,4 +1,4 @@
-import { formatBytes, kindOf } from "./format";
+import { formatBytes, kindOf } from "../shared/format";
 
 export type Entry = {
   name: string;

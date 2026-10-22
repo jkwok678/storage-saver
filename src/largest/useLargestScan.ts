@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { errorText, isWithin, runningInApp } from "./format";
-import { useStopOnUnmount } from "./useStopOnUnmount";
+import { errorText, isWithin, runningInApp } from "../shared/format";
+import { useStopOnUnmount } from "../shared/useStopOnUnmount";
 
 export type LargestFile = {
   name: string;

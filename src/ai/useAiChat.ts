@@ -1,9 +1,9 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { errorText, runningInApp } from "../shared/format";
 import { DEFAULT_LABEL, type EffortChoice, type ModelChoice } from "./aiModels";
 import type { AiProviderId, AiProviderStatus } from "./aiProviders";
 import type { AiQueryEvent, ChatMessage } from "./aiTypes";
-import { errorText, runningInApp } from "./format";
 
 /** Names the model and effort a reply used, leaving out the CLI defaults. */
 function replyModelLabel(model: ModelChoice | undefined, effort: EffortChoice | null) {

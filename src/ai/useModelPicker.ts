@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { errorText, runningInApp } from "../shared/format";
 import { type AiModel, type ModelChoice, modelChoices, pickEffort } from "./aiModels";
 import type { AiProviderId, AiProviderStatus } from "./aiProviders";
-import { errorText, runningInApp } from "./format";
 
 /** The model (by key) and effort (by label) picked for one provider. */
 export type ModelPick = { model: string | null; effort: string | null };

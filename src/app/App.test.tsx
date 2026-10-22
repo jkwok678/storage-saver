@@ -4,18 +4,18 @@ import App from "./App";
 import { useDiskSummary } from "./useDiskSummary";
 
 vi.mock("./useDiskSummary", () => ({ useDiskSummary: vi.fn() }));
-vi.mock("./BrowseView", () => ({
+vi.mock("../browse/BrowseView", () => ({
   default: ({ available }: { available: number | null }) => <p>browse {String(available)}</p>,
 }));
-vi.mock("./LargestFilesView", () => ({ default: () => <p>largest</p> }));
-vi.mock("./SettingsView", () => ({ default: () => <p>settings</p> }));
+vi.mock("../largest/LargestFilesView", () => ({ default: () => <p>largest</p> }));
+vi.mock("../settings/SettingsView", () => ({ default: () => <p>settings</p> }));
 type PanelProps = {
   hidden?: boolean;
   onClose: () => void;
   onOpenSettings: () => void;
   onItemTrashed?: (path: string, freedBytes: number) => void;
 };
-vi.mock("./AiAdvisorPanel", () => ({
+vi.mock("../ai/AiAdvisorPanel", () => ({
   AiAdvisorPanel: ({ hidden, onClose, onOpenSettings, onItemTrashed }: PanelProps) => (
     <aside hidden={hidden}>
       <button type="button" onClick={onClose}>

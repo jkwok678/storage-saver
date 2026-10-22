@@ -1,17 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { AiAdvisorPanel } from "./AiAdvisorPanel";
-import { type AiProviders, useAiProviders } from "./aiProviders";
-import BrowseView from "./BrowseView";
-import { formatBytes, type TrashedItem } from "./format";
-import { GearIcon, SparklesIcon } from "./icons";
-import LargestFilesView from "./LargestFilesView";
-import SettingsView from "./SettingsView";
+import { AiAdvisorPanel } from "../ai/AiAdvisorPanel";
+import { type AiProviders, useAiProviders } from "../ai/aiProviders";
+import BrowseView from "../browse/BrowseView";
+import LargestFilesView from "../largest/LargestFilesView";
+import SettingsView from "../settings/SettingsView";
+import { formatBytes, type TrashedItem } from "../shared/format";
+import { GearIcon, SparklesIcon } from "../shared/icons";
 import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
-import "./browse.css";
-import "./largest.css";
-import "./aiAdvisor.css";
-import "./settings.css";
 
 type View = "browse" | "largest" | "settings";
 

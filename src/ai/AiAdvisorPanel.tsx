@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { runningInApp } from "../shared/format";
+import { CloseIcon, SparklesIcon } from "../shared/icons";
 import {
   type AiProviderId,
   type AiProviderStatus,
@@ -10,12 +12,11 @@ import {
   providerStatusText,
 } from "./aiProviders";
 import { ChatMessageRow } from "./ChatMessageRow";
-import { runningInApp } from "./format";
-import { CloseIcon, SparklesIcon } from "./icons";
 import { ModelPickerRow } from "./ModelPickerRow";
 import { type AiChat, useAiChat } from "./useAiChat";
 import { useModelPicker } from "./useModelPicker";
 import { type TrashState, useTrash } from "./useTrash";
+import "./aiAdvisor.css";
 
 type Props = {
   ai: AiProviders;

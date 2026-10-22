@@ -7,8 +7,8 @@ export const OTHER_THRESHOLD = 0.005;
 export const MIN_EXPAND_TURN = 2 / 360;
 export const VIEWBOX = 100;
 export const CENTER = 50;
-export const OUTER_RADIUS = 48;
-export const HOLE_RATIO = 0.28;
+const OUTER_RADIUS = 48;
+const HOLE_RATIO = 0.28;
 
 export type ArcKind = "folder" | "files" | "other" | "free";
 

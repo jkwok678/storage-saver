@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir }));
 
 const stop = vi.fn();
 const rescan = vi.fn();
+const forget = vi.fn();
 
 function scanState(overrides: Partial<ReturnType<typeof useLargestScan>> = {}) {
   vi.mocked(useLargestScan).mockReturnValue({
@@ -22,6 +23,7 @@ function scanState(overrides: Partial<ReturnType<typeof useLargestScan>> = {}) {
     error: null,
     stop,
     rescan,
+    forget,
     ...overrides,
   });
 }

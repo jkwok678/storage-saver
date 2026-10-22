@@ -10,16 +10,18 @@ vi.mock("./BrowseView", () => ({
 vi.mock("./LargestFilesView", () => ({ default: () => <p>largest</p> }));
 
 const GB = 1024 ** 3;
+const refresh = vi.fn();
 
 describe("App", () => {
   beforeEach(() => {
-    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: null });
+    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: null, refresh });
   });
 
   it("shows disk capacity once the summary loads", () => {
     vi.mocked(useDiskSummary).mockReturnValue({
       summary: { total: 100 * GB, used: 25 * GB, available: 75 * GB },
       error: null,
+      refresh,
     });
     render(<App />);
     const meter = screen.getByRole("meter", { name: "Boot disk usage" });
@@ -32,7 +34,7 @@ describe("App", () => {
     const { rerender } = render(<App />);
     expect(screen.getByText("Reading disk…")).toBeTruthy();
     expect(screen.getByText("browse null")).toBeTruthy();
-    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: "No access" });
+    vi.mocked(useDiskSummary).mockReturnValue({ summary: null, error: "No access", refresh });
     rerender(<App />);
     expect(screen.getByText("No access").className).toBe("error");
   });
@@ -41,6 +43,7 @@ describe("App", () => {
     vi.mocked(useDiskSummary).mockReturnValue({
       summary: { total: 0, used: 0, available: 0 },
       error: null,
+      refresh,
     });
     render(<App />);
     expect(screen.getByText(/0% full/)).toBeTruthy();

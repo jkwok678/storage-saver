@@ -95,3 +95,12 @@ export function parentPath(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash <= 0 ? "/" : path.slice(0, slash);
 }
+
+/** The latest item moved to the Trash. `seq` changes even when the same path comes back. */
+export type TrashedItem = { path: string; seq: number };
+
+/** Whether `path` is `ancestor` or sits somewhere inside it. */
+export function isWithin(path: string, ancestor: string): boolean {
+  if (ancestor === "/") return path.startsWith("/");
+  return path === ancestor || path.startsWith(`${ancestor}/`);
+}

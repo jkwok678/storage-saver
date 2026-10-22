@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
-import { errorText, runningInApp } from "./format";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { errorText, isWithin, runningInApp } from "./format";
 import { useStopOnUnmount } from "./useStopOnUnmount";
 
 export type LargestFile = {
@@ -73,5 +73,10 @@ export function useLargestScan() {
 
   const rescan = () => setRequest(fullDiskScan());
 
-  return { files, scanned, scanning, error, stop, rescan };
+  // Drops a trashed item from the list instead of reading the whole disk again.
+  const forget = useCallback((path: string) => {
+    setFiles((current) => current.filter((file) => !isWithin(file.path, path)));
+  }, []);
+
+  return { files, scanned, scanning, error, stop, rescan, forget };
 }

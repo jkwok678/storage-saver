@@ -9,6 +9,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
@@ -24,11 +25,14 @@ static LARGEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Folder totals from finished scans. Opening a folder reads them instead of walking it again.
 static STORED: Mutex<Option<Tree>> = Mutex::new(None);
 
+/// Latest ranked largest files from the Largest Files scan, shared with AI context.
+static STORED_LARGEST: Mutex<Vec<LargestFile>> = Mutex::new(Vec::new());
+
 const NO_NODE: u32 = u32::MAX;
 const DENIED: u8 = 1;
 const FAILED: u8 = 2;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskSummary {
     pub total: u64,
@@ -111,7 +115,7 @@ struct Node {
 /// Every folder under `root`. A parent always has a smaller id than its children,
 /// so totals add up in one pass from the end.
 #[derive(Debug)]
-struct Tree {
+pub struct Tree {
     root: PathBuf,
     nodes: Vec<Node>,
     /// First error other than "not permitted" for a folder, by node id. Rare, so kept apart.
@@ -308,6 +312,48 @@ impl Tree {
         }
         self.graft(parent, name, fresh, 0);
 
+        let mut compact = Tree::new(self.root.clone());
+        compact.copy_into(0, self, 0);
+        compact.roll_up();
+        *self = compact;
+    }
+
+    fn path_of(&self, mut id: u32) -> PathBuf {
+        let mut parts = Vec::new();
+        while id != 0 && id != NO_NODE {
+            parts.push(&*self.nodes[id as usize].name);
+            id = self.nodes[id as usize].parent;
+        }
+        let mut full = self.root.clone();
+        for name in parts.into_iter().rev() {
+            full.push(name);
+        }
+        full
+    }
+
+    fn remove_node(&mut self, id: u32) {
+        if id == 0 || id as usize >= self.nodes.len() {
+            return;
+        }
+        let Node {
+            parent,
+            next_sibling,
+            ..
+        } = self.nodes[id as usize];
+        if parent == NO_NODE {
+            return;
+        }
+        if self.nodes[parent as usize].first_child == id {
+            self.nodes[parent as usize].first_child = next_sibling;
+        } else {
+            let mut sibling = self.nodes[parent as usize].first_child;
+            while sibling != NO_NODE && self.nodes[sibling as usize].next_sibling != id {
+                sibling = self.nodes[sibling as usize].next_sibling;
+            }
+            if sibling != NO_NODE {
+                self.nodes[sibling as usize].next_sibling = next_sibling;
+            }
+        }
         let mut compact = Tree::new(self.root.clone());
         compact.copy_into(0, self, 0);
         compact.roll_up();
@@ -568,6 +614,7 @@ fn run_largest_scan(
                         }
                         last_scanned = scanned;
                         let files = scan_ref.snapshot();
+                        *lock(&STORED_LARGEST) = files.clone();
                         if events.send(LargestEvent::Batch { files, scanned }).is_err() {
                             break;
                         }
@@ -585,8 +632,10 @@ fn run_largest_scan(
         return Ok(());
     }
     let scanned = scan.scanned.load(Ordering::Relaxed);
+    let final_files = scan.snapshot();
+    *lock(&STORED_LARGEST) = final_files.clone();
     let _ = on_event.send(LargestEvent::Batch {
-        files: scan.snapshot(),
+        files: final_files,
         scanned,
     });
     let _ = on_event.send(LargestEvent::Done { scanned });
@@ -1227,6 +1276,473 @@ fn cancel_if_current(generation: u64) {
     );
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotItem {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub bytes: u64,
+    pub own_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageSnapshot {
+    pub disk: Option<DiskSummary>,
+    pub current_path: Option<String>,
+    pub current_items: Vec<SnapshotItem>,
+    pub top_folders: Vec<SnapshotItem>,
+    pub dense_folders: Vec<SnapshotItem>,
+    pub largest_files: Vec<LargestFile>,
+    pub notable_locations: Vec<SnapshotItem>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashOutcome {
+    pub original_path: String,
+    pub trash_path: String,
+    pub freed_bytes: u64,
+    /// Whether Finder trashed it, so "Put Back" can restore it.
+    pub put_back: bool,
+}
+
+/// Gather a structured snapshot of known disk usage, current directory items, stored tree folders,
+/// largest files, and common user cache/cleanup locations.
+pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
+    let disk = read_disk_summary().ok();
+    let current_path_str = current_path.map(ToOwned::to_owned);
+
+    let mut current_items = Vec::new();
+    if let Some(dir_str) = current_path {
+        let dir = Path::new(dir_str);
+        if let Ok(mut children) = list_children(dir) {
+            let _ = fill_stored_sizes(&STORED, dir, &mut children, false);
+            for child in children {
+                if let Some(bytes) = child.bytes {
+                    current_items.push(SnapshotItem {
+                        path: child.path,
+                        name: child.name,
+                        is_dir: child.is_dir,
+                        bytes,
+                        own_bytes: if child.is_dir { 0 } else { bytes },
+                    });
+                }
+            }
+            current_items.sort_by_key(|item| Reverse(item.bytes));
+            current_items.truncate(35);
+        }
+    }
+
+    let (top_folders, dense_folders) = {
+        let guard = lock(&STORED);
+        match guard.as_ref() {
+            Some(tree) => (
+                ranked_folders(tree, 40, 0, |node| node.total),
+                ranked_folders(tree, 25, 10 * 1024 * 1024, |node| node.own),
+            ),
+            None => (Vec::new(), Vec::new()),
+        }
+    };
+
+    let mut largest_files = lock(&STORED_LARGEST).clone();
+    largest_files.truncate(40);
+
+    let mut notable_locations = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = PathBuf::from(&home);
+        let candidates = [
+            "Library/Caches",
+            "Downloads",
+            ".Trash",
+            "Library/Logs",
+            "Library/Developer/Xcode/DerivedData",
+            "Library/Developer/CoreSimulator",
+            "Library/Application Support",
+            "Library/Containers",
+            ".npm",
+            ".cargo/registry",
+            ".cache",
+        ];
+        for rel in candidates {
+            let candidate = home_path.join(rel);
+            if !candidate.exists() {
+                continue;
+            }
+            let known_bytes = {
+                let guard = lock(&STORED);
+                guard
+                    .as_ref()
+                    .and_then(|tree| tree.find(&candidate).and_then(|id| tree.size_of(id).ok()))
+            };
+            let bytes = known_bytes.or_else(|| {
+                if matches!(
+                    rel,
+                    ".Trash"
+                        | "Library/Caches"
+                        | "Library/Logs"
+                        | "Library/Developer/Xcode/DerivedData"
+                        | ".npm"
+                        | ".cargo/registry"
+                        | ".cache"
+                ) {
+                    measure_tree(&candidate, None, &Arc::default())
+                        .ok()
+                        .and_then(|t| t.size_of(0).ok())
+                } else {
+                    None
+                }
+            });
+            if let Some(bytes) = bytes
+                && bytes > 0
+            {
+                notable_locations.push(SnapshotItem {
+                    path: candidate.to_string_lossy().into_owned(),
+                    name: format!("~/{rel}"),
+                    is_dir: true,
+                    bytes,
+                    own_bytes: 0,
+                });
+            }
+        }
+        notable_locations.sort_by_key(|item| Reverse(item.bytes));
+    }
+
+    StorageSnapshot {
+        disk,
+        current_path: current_path_str,
+        current_items,
+        top_folders,
+        dense_folders,
+        largest_files,
+        notable_locations,
+    }
+}
+
+/// The `limit` folders with the most `key` bytes above `min`. A whole-disk tree holds millions of
+/// folders, so paths are built only for the ones kept.
+fn ranked_folders(
+    tree: &Tree,
+    limit: usize,
+    min: u64,
+    key: impl Fn(&Node) -> u64,
+) -> Vec<SnapshotItem> {
+    let skip_root = tree.root == Path::new("/");
+    let mut ids: Vec<u32> = (0..tree.nodes.len() as u32)
+        .filter(|&id| !(id == 0 && skip_root) && key(&tree.nodes[id as usize]) > min)
+        .collect();
+    let by_size = |id: &u32| Reverse(key(&tree.nodes[*id as usize]));
+    if ids.len() > limit {
+        ids.select_nth_unstable_by_key(limit, by_size);
+        ids.truncate(limit);
+    }
+    ids.sort_unstable_by_key(by_size);
+    ids.into_iter()
+        .map(|id| {
+            let node = &tree.nodes[id as usize];
+            let path = tree.path_of(id);
+            let name = if id == 0 {
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned())
+            } else {
+                node.name.to_string()
+            };
+            SnapshotItem {
+                path: path.to_string_lossy().into_owned(),
+                name,
+                is_dir: true,
+                bytes: node.total,
+                own_bytes: node.own,
+            }
+        })
+        .collect()
+}
+
+/// Inspect a path on disk, returning `(allocated_bytes, is_dir)` if it exists.
+pub fn inspect_path_size(path: &Path) -> Option<(u64, bool)> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    let is_dir = is_real_dir(&metadata.file_type());
+    if !is_dir {
+        let bytes = if metadata.is_file() {
+            allocated_bytes(&metadata)
+        } else {
+            0
+        };
+        return Some((bytes, false));
+    }
+    {
+        let guard = lock(&STORED);
+        if let Some(tree) = guard.as_ref()
+            && let Some(id) = tree.find(path)
+            && let Ok(bytes) = tree.size_of(id)
+        {
+            return Some((bytes, true));
+        }
+    }
+    let tree = measure_tree(path, None, &Arc::default()).ok()?;
+    let bytes = tree.size_of(0).unwrap_or(0);
+    Some((bytes, true))
+}
+
+pub fn is_protected_path(path: &Path) -> bool {
+    // APFS ignores case by default, so `/system` and `~/library` name the protected folders too.
+    let path = &lowercase(path);
+    let protected_exact = [
+        "/",
+        "/System",
+        "/Library",
+        "/Applications",
+        "/Users",
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/var",
+        "/private",
+        "/private/var",
+        "/private/etc",
+        "/etc",
+        "/dev",
+        "/Volumes",
+        "/cores",
+        "/opt",
+        "/Users/Shared",
+    ];
+    for entry in protected_exact {
+        if *path == lowercase(Path::new(entry)) {
+            return true;
+        }
+    }
+    if path.starts_with("/system") || path.starts_with("/bin") || path.starts_with("/sbin") {
+        return true;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = lowercase(Path::new(&home));
+        if *path == home_path {
+            return true;
+        }
+        for top in [
+            "Applications",
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Library",
+            "Library/Application Support",
+            "Library/Containers",
+            "Library/Group Containers",
+            "Library/Keychains",
+            "Library/Mail",
+            "Library/Messages",
+            "Library/Mobile Documents",
+            "Library/Preferences",
+            "Pictures",
+            "Music",
+            "Movies",
+            ".Trash",
+        ] {
+            if *path == home_path.join(top.to_lowercase()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn lowercase(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+#[tauri::command]
+pub async fn move_to_trash(path: String) -> Result<TrashOutcome, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        let home =
+            std::env::var("HOME").map_err(|_| "Could not determine HOME directory".to_string())?;
+        let trash_dir = PathBuf::from(home).join(".Trash");
+        trash_path_into(
+            Path::new(&path),
+            &trash_dir,
+            &STORED,
+            &STORED_LARGEST,
+            move_with_finder,
+        )
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// Move `target` to the Trash with `move_item`, which returns where it landed and whether
+/// "Put Back" can restore it, then drop it from the stored totals.
+pub fn trash_path_into(
+    target: &Path,
+    trash_dir: &Path,
+    stored: &Mutex<Option<Tree>>,
+    stored_largest: &Mutex<Vec<LargestFile>>,
+    move_item: impl FnOnce(&Path, &Path) -> Result<(PathBuf, bool), String>,
+) -> Result<TrashOutcome, String> {
+    if !target.is_absolute() {
+        return Err("Path must be absolute".into());
+    }
+    // `..` would let a path that reads as harmless land on a protected folder.
+    if target.components().any(|c| c == Component::ParentDir) {
+        return Err("Path must not contain `..`".into());
+    }
+    let metadata = fs::symlink_metadata(target).map_err(|err| err.to_string())?;
+    // Check the folder the item really sits in, so a linked parent cannot hide a protected one.
+    // The item itself is not resolved: a link goes to the Trash, not what it points to.
+    let resolved = match (target.parent().map(fs::canonicalize), target.file_name()) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => target.to_path_buf(),
+    };
+    if is_protected_path(target) || is_protected_path(&resolved) {
+        return Err(format!(
+            "Refusing to move protected folder {}",
+            target.display()
+        ));
+    }
+    let trash_resolved = fs::canonicalize(trash_dir).unwrap_or_else(|_| trash_dir.to_path_buf());
+    if lowercase(target).starts_with(lowercase(trash_dir))
+        || lowercase(&resolved).starts_with(lowercase(&trash_resolved))
+    {
+        return Err("Item is already in the Trash".into());
+    }
+    let is_dir = is_real_dir(&metadata.file_type());
+    let freed_bytes = if is_dir {
+        let from_stored = lock(stored)
+            .as_ref()
+            .and_then(|tree| tree.find(target).and_then(|id| tree.size_of(id).ok()));
+        from_stored.unwrap_or_else(|| {
+            measure_tree(target, None, &Arc::default())
+                .ok()
+                .and_then(|t| t.size_of(0).ok())
+                .unwrap_or(0)
+        })
+    } else if metadata.is_file() {
+        allocated_bytes(&metadata)
+    } else {
+        0
+    };
+
+    let (dest, put_back) = move_item(target, trash_dir)?;
+
+    // Keep stored tree and largest files in sync with the deletion.
+    {
+        let mut guard = lock(stored);
+        if guard
+            .as_ref()
+            .is_some_and(|tree| tree.root.starts_with(target))
+        {
+            // The stored root went with it, so nothing the tree holds is on disk any more.
+            *guard = None;
+        } else if let Some(tree) = guard.as_mut() {
+            if is_dir {
+                if let Some(id) = tree.find(target) {
+                    tree.remove_node(id);
+                }
+            } else if let Some(parent) = target.parent()
+                && let Some(parent_id) = tree.find(parent)
+            {
+                let node = &mut tree.nodes[parent_id as usize];
+                node.own = node.own.saturating_sub(freed_bytes);
+                tree.roll_up();
+            }
+        }
+    }
+    {
+        let mut largest = lock(stored_largest);
+        let prefix = format!("{}/", target.to_string_lossy());
+        let exact = target.to_string_lossy();
+        largest.retain(|file| file.path != exact.as_ref() && !file.path.starts_with(&prefix));
+    }
+
+    Ok(TrashOutcome {
+        original_path: target.to_string_lossy().into_owned(),
+        trash_path: dest.to_string_lossy().into_owned(),
+        freed_bytes,
+        put_back,
+    })
+}
+
+/// Trash through Finder, which records where the item came from so "Put Back" works.
+/// Falls back to a plain move when Finder cannot do it, e.g. when Automation is not allowed.
+fn move_with_finder(target: &Path, trash_dir: &Path) -> Result<(PathBuf, bool), String> {
+    // Finder resolves a link to what it points to, so a link is moved itself instead.
+    let is_link = fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        match finder_trash(target) {
+            Ok(dest) => return Ok((dest, true)),
+            // Finder trashed it and only its reply went wrong.
+            Err(_) if fs::symlink_metadata(target).is_err() => {
+                let name = target.file_name().unwrap_or_default();
+                return Ok((trash_dir.join(name), true));
+            }
+            Err(_) => {}
+        }
+    }
+    move_into_trash(target, trash_dir).map(|dest| (dest, false))
+}
+
+fn finder_trash(target: &Path) -> Result<PathBuf, String> {
+    // The path goes in as an argument, never into the script text.
+    let output = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "set target to POSIX file (item 1 of argv) as alias",
+            "-e",
+            "tell application \"Finder\" to set trashed to (delete target) as alias",
+            "-e",
+            "return POSIX path of trashed",
+            "-e",
+            "end run",
+        ])
+        .arg(target)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let dest = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let dest = dest.strip_suffix('/').unwrap_or(&dest);
+    Ok(PathBuf::from(dest))
+}
+
+/// Rename into `trash_dir`, numbering the name when the Trash already holds one like it.
+fn move_into_trash(target: &Path, trash_dir: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(trash_dir).map_err(|err| err.to_string())?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "Invalid file name".to_string())?
+        .to_string_lossy()
+        .into_owned();
+    let dest = unique_trash_destination(trash_dir, &file_name);
+    fs::rename(target, &dest).map_err(|err| err.to_string())?;
+    Ok(dest)
+}
+
+fn unique_trash_destination(trash_dir: &Path, name: &str) -> PathBuf {
+    let initial = trash_dir.join(name);
+    if fs::symlink_metadata(&initial).is_err() {
+        return initial;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(dot) if dot > 0 => (&name[..dot], &name[dot..]),
+        _ => (name, ""),
+    };
+    for counter in 2..10_000 {
+        let candidate = trash_dir.join(format!("{stem} {counter}{ext}"));
+        if fs::symlink_metadata(&candidate).is_err() {
+            return candidate;
+        }
+    }
+    trash_dir.join(format!("{stem}-{}{ext}", std::process::id()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1780,5 +2296,126 @@ mod tests {
             serde_json::to_value(ScanEvent::Done).unwrap()["event"],
             "done"
         );
+    }
+
+    #[test]
+    fn trash_moves_items_with_collision_suffix_and_updates_stored_totals() {
+        let root = TempDir::new();
+        let trash = TempDir::new();
+        let cache = root.0.join("cache");
+        let keep_dir = root.0.join("keep");
+        fs::create_dir(&cache).unwrap();
+        fs::create_dir(&keep_dir).unwrap();
+        let junk = cache.join("junk.bin");
+        let kept = keep_dir.join("kept.bin");
+        fs::write(&junk, vec![4u8; 128 * 1024]).unwrap();
+        fs::write(&kept, vec![5u8; 64 * 1024]).unwrap();
+        let junk_bytes = file_bytes(&junk);
+        let kept_bytes = file_bytes(&kept);
+
+        let stored = Mutex::new(None);
+        scan(&stored, &root.0, false);
+        let stored_largest = Mutex::new(vec![
+            LargestFile {
+                name: "junk.bin".into(),
+                path: junk.to_string_lossy().into_owned(),
+                bytes: junk_bytes,
+            },
+            LargestFile {
+                name: "kept.bin".into(),
+                path: kept.to_string_lossy().into_owned(),
+                bytes: kept_bytes,
+            },
+        ]);
+
+        // Pre-populate a colliding name in trash
+        fs::create_dir(trash.0.join("cache")).unwrap();
+
+        let outcome =
+            trash_path_into(&cache, &trash.0, &stored, &stored_largest, move_plainly).unwrap();
+        assert_eq!(outcome.freed_bytes, junk_bytes);
+        assert!(outcome.trash_path.ends_with("cache 2"));
+        assert!(!cache.exists());
+
+        // Stored tree should reflect that `cache` is gone and root total is now just `kept_bytes`.
+        let tree_guard = lock(&stored);
+        let tree = tree_guard.as_ref().unwrap();
+        assert!(tree.find(&cache).is_none());
+        assert_eq!(tree.size_of(0).unwrap(), kept_bytes);
+        drop(tree_guard);
+
+        // Stored largest files should no longer contain files from the trashed folder.
+        let remaining = lock(&stored_largest);
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].name, "kept.bin");
+    }
+
+    /// Tests move into their own folder, never the real Trash through Finder.
+    fn move_plainly(target: &Path, trash_dir: &Path) -> Result<(PathBuf, bool), String> {
+        move_into_trash(target, trash_dir).map(|dest| (dest, false))
+    }
+
+    #[test]
+    fn protected_paths_cannot_be_trashed() {
+        assert!(is_protected_path(Path::new("/")));
+        assert!(is_protected_path(Path::new("/System")));
+        assert!(is_protected_path(Path::new("/System/Library")));
+        assert!(is_protected_path(Path::new("/Applications")));
+        assert!(is_protected_path(Path::new("/Users")));
+        assert!(is_protected_path(Path::new("/system/library")));
+        let home = std::env::var("HOME").unwrap();
+        assert!(is_protected_path(&Path::new(&home).join("library")));
+        assert!(is_protected_path(
+            &Path::new(&home).join("Library/Keychains")
+        ));
+        assert!(!is_protected_path(&Path::new(&home).join("Library/Caches")));
+    }
+
+    #[test]
+    fn trash_refuses_paths_that_climb_out() {
+        let home = std::env::var("HOME").unwrap();
+        let sneaky = Path::new(&home).join("Documents/../Library");
+        let trash = TempDir::new();
+        let stored = Mutex::new(None);
+        let stored_largest = Mutex::new(Vec::new());
+        assert!(
+            trash_path_into(&sneaky, &trash.0, &stored, &stored_largest, move_plainly).is_err()
+        );
+        assert!(Path::new(&home).join("Library").exists());
+    }
+
+    #[test]
+    fn trashing_the_stored_root_forgets_the_tree() {
+        let root = TempDir::new();
+        let trash = TempDir::new();
+        let folder = root.0.join("folder");
+        fs::create_dir_all(folder.join("inner")).unwrap();
+        fs::write(folder.join("inner/a.bin"), vec![1u8; 4096]).unwrap();
+        let stored = Mutex::new(None);
+        scan(&stored, &folder, false);
+        assert!(lock(&stored).is_some());
+
+        trash_path_into(
+            &folder,
+            &trash.0,
+            &stored,
+            &Mutex::new(Vec::new()),
+            move_plainly,
+        )
+        .unwrap();
+        assert!(lock(&stored).is_none());
+    }
+
+    #[test]
+    fn ranked_folders_keep_the_largest_in_order() {
+        let mut tree = Tree::new(PathBuf::from("/data"));
+        for (index, own) in [5u64, 50, 20, 40].into_iter().enumerate() {
+            let id = tree.add_child(0, format!("f{index}").into());
+            tree.nodes[id as usize].own = own;
+        }
+        tree.roll_up();
+        let top = ranked_folders(&tree, 2, 10, |node| node.own);
+        let paths: Vec<&str> = top.iter().map(|item| item.path.as_str()).collect();
+        assert_eq!(paths, ["/data/f1", "/data/f3"]);
     }
 }

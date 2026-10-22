@@ -1,6 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
-import { errorText, formatBytes, parentPath, runningInApp } from "./format";
+import { useEffect, useState } from "react";
+import { errorText, formatBytes, parentPath, runningInApp, type TrashedItem } from "./format";
 import { FileIcon } from "./icons";
 import { type LargestFile, useLargestScan } from "./useLargestScan";
 
@@ -15,9 +15,17 @@ function emptyText(error: string | null, scanning: boolean) {
   return error ?? "No files found.";
 }
 
-function LargestFilesView() {
-  const { files, scanned, scanning, error, stop, rescan } = useLargestScan();
+type Props = {
+  trashed?: TrashedItem | null;
+};
+
+function LargestFilesView({ trashed }: Props = {}) {
+  const { files, scanned, scanning, error, stop, rescan, forget } = useLargestScan();
   const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (trashed) forget(trashed.path);
+  }, [trashed, forget]);
 
   const scanAgain = () => {
     setActionError(null);

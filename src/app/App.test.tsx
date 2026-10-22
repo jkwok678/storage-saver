@@ -9,6 +9,7 @@ vi.mock("../browse/BrowseView", () => ({
 }));
 vi.mock("../largest/LargestFilesView", () => ({ default: () => <p>largest</p> }));
 vi.mock("../settings/SettingsView", () => ({ default: () => <p>settings</p> }));
+vi.mock("../diskmap/DiskMapView", () => ({ default: () => <p>diskmap</p> }));
 type PanelProps = {
   hidden?: boolean;
   onClose: () => void;
@@ -79,6 +80,30 @@ describe("App", () => {
     expect(screen.getByText("largest")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     expect(screen.getByText(/^browse/)).toBeTruthy();
+  });
+
+  it("shows the Disk Map tab and renders DiskMapView when clicked", () => {
+    render(<App />);
+    const diskMap = screen.getByRole("button", { name: "Disk Map" });
+    expect(diskMap).toBeTruthy();
+    fireEvent.click(diskMap);
+    expect(diskMap.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("diskmap")).toBeTruthy();
+  });
+
+  it("preserves browsePath when switching to Disk Map and back", () => {
+    vi.mocked(useDiskSummary).mockReturnValue({
+      summary: { total: 100 * GB, used: 25 * GB, available: 75 * GB },
+      error: null,
+      refresh,
+    });
+    render(<App />);
+    // Default view is Browse — shows available as browse prop
+    expect(screen.getByText(`browse ${75 * GB}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Disk Map" }));
+    expect(screen.getByText("diskmap")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    expect(screen.getByText(`browse ${75 * GB}`)).toBeTruthy();
   });
 
   it("opens Settings from the gear, the panel and ⌘,", () => {

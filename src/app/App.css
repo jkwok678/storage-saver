@@ -47,12 +47,14 @@ input {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
 .header-controls {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .app-workspace {
@@ -72,6 +74,7 @@ input {
 
 .views {
   display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
@@ -80,13 +83,14 @@ input {
 
 .views button {
   border: 0;
-  padding: 4px 12px;
+  padding: 4px 10px;
   border-radius: 6px;
   background: transparent;
   color: #3a3a3c;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .views button:hover {

@@ -8,6 +8,10 @@ import LargestFilesView from "./LargestFilesView";
 import SettingsView from "./SettingsView";
 import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
+import "./browse.css";
+import "./largest.css";
+import "./aiAdvisor.css";
+import "./settings.css";
 
 type View = "browse" | "largest" | "settings";
 

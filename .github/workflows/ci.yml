@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   web:
-    name: Web (tsc, biome, fallow)
+    name: Web (tsc, biome, vitest, fallow)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +25,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm exec biome ci .
+      - run: pnpm test:coverage
+      # Health uses the coverage report for exact CRAP scores.
       - run: pnpm fallow
 
   rust:

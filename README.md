@@ -19,6 +19,7 @@ Run `pnpm check` before pushing; CI (`.github/workflows/ci.yml`) runs the same c
 | ----------------------------- | ------------------------------------------------------------- |
 | `pnpm typecheck`              | `tsc --noEmit`                                                |
 | `pnpm lint` / `pnpm lint:fix` | Biome lint + format + import sorting                          |
-| `pnpm fallow`                 | Fallow unused code/deps and duplication                       |
+| `pnpm test` / `pnpm test:coverage` | Vitest unit and component tests |
+| `pnpm fallow` | Fallow unused code/deps, duplication, and complexity (run `test:coverage` first) |
 | `pnpm check:rust`             | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` |
 | `pnpm check`                  | All of the above                                              |

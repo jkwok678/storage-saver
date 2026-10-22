@@ -27,3 +27,6 @@ src-tauri/gen
 *.sln
 *.sw?
 .fallow/
+
+# Test coverage
+coverage

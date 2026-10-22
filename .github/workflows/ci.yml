@@ -10,39 +10,133 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  web:
-    name: Web (tsc, biome, vitest, fallow)
+  typecheck:
+    name: tsc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - run: pnpm typecheck
+
+  biome:
+    name: Biome
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - run: pnpm exec biome ci .
+
+  test:
+    name: Vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - run: pnpm test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/coverage-final.json
+
+  fallow-dead-code:
+    name: Fallow dead code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - run: pnpm exec fallow dead-code --fail-on-issues
+
+  fallow-dupes:
+    name: Fallow duplication
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - run: pnpm exec fallow dupes
+
+  fallow-health:
+    name: Fallow health
+    # Uses the Vitest coverage report for exact CRAP scores.
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          # Hotspot analysis reads git history.
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-web
+      - uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm exec biome ci .
-      - run: pnpm test:coverage
-      # Health uses the coverage report for exact CRAP scores.
-      - run: pnpm fallow
+          name: coverage
+          path: coverage
+      - run: pnpm exec fallow health --coverage coverage/coverage-final.json
 
-  rust:
-    name: Rust (fmt, clippy, test)
-    # The app targets macOS (libc disk APIs, Trash), so lint and test there.
+  rust-fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+  # The app targets macOS (libc disk APIs, Trash), so clippy and tests run there.
+  rust-clippy:
+    name: cargo clippy
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: clippy
       # tauri::generate_context! requires frontendDist to exist at compile time.
       - run: mkdir -p dist
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  rust-test:
+    name: cargo test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: test
+      - run: mkdir -p dist
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  build:
+    name: Tauri build
+    needs:
+      - typecheck
+      - biome
+      - test
+      - fallow-dead-code
+      - fallow-dupes
+      - fallow-health
+      - rust-fmt
+      - rust-clippy
+      - rust-test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: build
+      # Unsigned .app + .dmg; beforeBuildCommand runs the frontend build.
+      - run: pnpm tauri build --ci --bundles app,dmg
+      # Only the .dmg: artifact uploads drop file permissions, which breaks a bare .app.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storage-saver-macos
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error

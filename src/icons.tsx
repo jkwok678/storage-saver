@@ -5,11 +5,7 @@ export function FolderIcon() {
         d="M1.4 3.9c0-.8.6-1.4 1.4-1.4h2.9l1.5 1.8h6.1c.8 0 1.4.6 1.4 1.4v6.4c0 .8-.6 1.4-1.4 1.4H2.8c-.8 0-1.4-.6-1.4-1.4z"
         fill="#4c9df2"
       />
-      <path
-        d="M1.4 5.4h13.2v1H1.4z"
-        fill="#fff"
-        fillOpacity=".35"
-      />
+      <path d="M1.4 5.4h13.2v1H1.4z" fill="#fff" fillOpacity=".35" />
     </svg>
   );
 }

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FileIcon } from "./icons";
+import { useEffect, useRef, useState } from "react";
 import { errorText, formatBytes, runningInApp } from "./format";
+import { FileIcon } from "./icons";
 
 type LargestFile = {
   name: string;
@@ -30,6 +30,7 @@ function LargestFilesView() {
   const [run, setRun] = useState(0);
   const scanGen = useRef(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `run` is a counter that re-triggers the scan
   useEffect(() => {
     const gen = ++scanGen.current;
     setFiles([]);
@@ -166,11 +167,7 @@ function LargestFilesView() {
           ) : (
             <div className="largest-empty">
               <p className="status">
-                {scanning
-                  ? "Looking for the biggest files…"
-                  : error
-                    ? error
-                    : "No files found."}
+                {scanning ? "Looking for the biggest files…" : error ? error : "No files found."}
               </p>
             </div>
           )}

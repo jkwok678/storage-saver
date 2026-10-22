@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import BrowseView from "./BrowseView";
-import LargestFilesView from "./LargestFilesView";
 import { errorText, formatBytes, runningInApp } from "./format";
+import LargestFilesView from "./LargestFilesView";
 import "./App.css";
 
 type DiskSummary = {
@@ -63,6 +63,7 @@ function App() {
         </div>
         {summary ? (
           <>
+            {/* biome-ignore lint/a11y/useSemanticElements: <meter> can't be styled as a custom track */}
             <div
               className="capacity-track"
               role="meter"
@@ -79,9 +80,7 @@ function App() {
             </p>
           </>
         ) : (
-          <p className={summaryError ? "error" : "status"}>
-            {summaryError ?? "Reading disk…"}
-          </p>
+          <p className={summaryError ? "error" : "status"}>{summaryError ?? "Reading disk…"}</p>
         )}
       </header>
 

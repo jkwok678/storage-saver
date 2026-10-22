@@ -1,14 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { breadcrumbs, errorText, formatBytes, formatDate, kindOf, runningInApp } from "./format";
 import { FileIcon, FolderIcon } from "./icons";
-import {
-  breadcrumbs,
-  errorText,
-  formatBytes,
-  formatDate,
-  kindOf,
-  runningInApp,
-} from "./format";
 
 type Entry = {
   name: string;

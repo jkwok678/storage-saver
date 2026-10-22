@@ -1,17 +1,10 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
-import { errorText, runningInApp } from "../shared/format";
+import { type ScanRequest, type SizeUpdate, startDirectoryScan } from "../diskmap/scanDirectory";
+import { runningInApp } from "../shared/format";
 import { useStopOnUnmount } from "../shared/useStopOnUnmount";
 import type { Entry } from "./entries";
 
-type SizeUpdate = { path: string; bytes: number; error: string | null };
-
-type ScanEvent =
-  | { event: "started"; data: { entries: Entry[] } }
-  | { event: "sized"; data: SizeUpdate }
-  | { event: "done" };
-
-export type ScanRequest = { path: string; refresh: boolean };
+export type { ScanRequest };
 
 /** Coalesces per-entry size events into at most one state update per animation frame. */
 function batchSizeUpdates(isCurrent: () => boolean, setEntries: Dispatch<SetStateAction<Entry[]>>) {
@@ -75,26 +68,24 @@ export function useDirectoryScan(request: ScanRequest) {
     }
 
     const sizes = batchSizeUpdates(isCurrent, setEntries);
-    const channel = new Channel<ScanEvent>();
-    channel.onmessage = (message) => {
-      if (!isCurrent()) return;
-      if (message.event === "started") setEntries(message.data.entries);
-      else if (message.event === "sized") sizes.add(message.data);
-      else sizes.flushNow();
-    };
-
-    invoke("scan_directory", { path: request.path, refresh: request.refresh, onEvent: channel })
-      .then(() => {
-        if (isCurrent()) setScanning(false);
-      })
-      .catch((error: unknown) => {
-        if (!isCurrent()) return;
-        setScanError(errorText(error));
+    const cancel = startDirectoryScan(request, {
+      isCurrent,
+      onStarted: (e) => setEntries(e),
+      onSized: (update) => sizes.add(update),
+      onDone: () => {
+        sizes.flushNow();
         setScanning(false);
-      });
+      },
+      onError: (message) => {
+        sizes.cancel();
+        setScanError(message);
+        setScanning(false);
+      },
+    });
 
     return () => {
       active = false;
+      cancel();
       sizes.cancel();
     };
   }, [request]);

@@ -1,0 +1,250 @@
+.diskmap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.diskmap .location {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.diskmap .actions {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+
+.diskmap .refresh {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0a84ff;
+  cursor: pointer;
+}
+
+.diskmap .refresh:hover {
+  text-decoration: underline;
+}
+
+.diskmap .refresh:disabled {
+  opacity: 0.45;
+  cursor: default;
+  text-decoration: none;
+}
+
+.diskmap .crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.diskmap .crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.diskmap .crumbs button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0a84ff;
+  cursor: pointer;
+}
+
+.diskmap .crumbs button:hover {
+  text-decoration: underline;
+}
+
+.diskmap-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8d8dd;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  position: relative;
+}
+
+.diskmap-panel .status,
+.diskmap-panel .empty {
+  padding: 28px 12px;
+  text-align: center;
+}
+
+.sunburst-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, 560px);
+  height: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
+  margin: 0;
+  padding: 16px;
+  border: 0;
+}
+
+.sunburst {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.arc {
+  cursor: default;
+  stroke: #fff;
+  stroke-width: 0.45;
+  transition:
+    opacity 0.12s ease,
+    filter 0.12s ease;
+}
+
+.arc-folder {
+  cursor: pointer;
+}
+
+.arc-folder:hover,
+.arc-folder:focus-visible {
+  opacity: 0.88;
+  outline: none;
+  filter: brightness(1.08);
+}
+
+.arc-folder:focus-visible {
+  stroke: #0a84ff;
+  stroke-width: 0.8;
+}
+
+.arc-files {
+  fill: var(--arc-files, #b0b0ba);
+}
+
+.arc-other {
+  fill: var(--arc-other, #c8c8d0);
+}
+
+.arc-free {
+  fill: var(--arc-free, #e4e4ea);
+}
+
+.arc-pending {
+  fill: url("#pending-hatch");
+  color: #8e8e93;
+  opacity: 0.7;
+}
+
+.sunburst-centre {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  width: 24%;
+  max-width: 120px;
+  overflow: hidden;
+}
+
+.centre-name {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #1c1c1e;
+}
+
+.centre-size {
+  font-size: 11px;
+  color: #636366;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 3px;
+}
+
+.sunburst-tooltip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  background: rgba(28, 28, 30, 0.9);
+  color: #f5f5f7;
+  border-radius: 8px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  max-width: 240px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.tooltip-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tooltip-size,
+.tooltip-pct {
+  color: rgba(245, 245, 247, 0.75);
+  font-size: 11.5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .diskmap-panel {
+    background: #232326;
+    border-color: #3a3a3c;
+  }
+
+  .arc {
+    stroke: #232326;
+  }
+
+  .arc-folder:hover,
+  .arc-folder:focus-visible {
+    filter: brightness(1.18);
+  }
+
+  .arc-files {
+    --arc-files: #6e6e78;
+  }
+
+  .arc-other {
+    --arc-other: #5a5a62;
+  }
+
+  .arc-free {
+    --arc-free: #3f3f46;
+  }
+
+  .arc-pending {
+    color: #8e8e93;
+  }
+
+  .centre-name {
+    color: #f5f5f7;
+  }
+
+  .centre-size {
+    color: #aeaeb2;
+  }
+
+  .sunburst-tooltip {
+    background: rgba(44, 44, 46, 0.94);
+  }
+}

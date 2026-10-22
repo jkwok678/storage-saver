@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AiAdvisorPanel } from "../ai/AiAdvisorPanel";
 import { type AiProviders, useAiProviders } from "../ai/aiProviders";
 import BrowseView from "../browse/BrowseView";
+import DiskMapView from "../diskmap/DiskMapView";
 import LargestFilesView from "../largest/LargestFilesView";
 import SettingsView from "../settings/SettingsView";
 import { formatBytes, type TrashedItem } from "../shared/format";
@@ -9,10 +10,11 @@ import { GearIcon, SparklesIcon } from "../shared/icons";
 import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
 
-type View = "browse" | "largest" | "settings";
+type View = "browse" | "largest" | "diskmap" | "settings";
 
 const VIEWS: Array<{ key: View; label: string }> = [
   { key: "browse", label: "Browse" },
+  { key: "diskmap", label: "Disk Map" },
   { key: "largest", label: "Largest Files" },
 ];
 
@@ -97,6 +99,15 @@ type CurrentViewProps = {
 function CurrentView({ view, ai, browsePath, onBrowsePath, available, trashed }: CurrentViewProps) {
   if (view === "settings") return <SettingsView ai={ai} />;
   if (view === "largest") return <LargestFilesView trashed={trashed} />;
+  if (view === "diskmap")
+    return (
+      <DiskMapView
+        initialPath={browsePath}
+        onPathChange={onBrowsePath}
+        available={available}
+        trashed={trashed}
+      />
+    );
   return (
     <BrowseView
       initialPath={browsePath}

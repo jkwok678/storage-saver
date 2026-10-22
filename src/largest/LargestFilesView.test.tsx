@@ -4,8 +4,8 @@ import LargestFilesView from "./LargestFilesView";
 import { useLargestScan } from "./useLargestScan";
 
 vi.mock("./useLargestScan", () => ({ useLargestScan: vi.fn() }));
-vi.mock("./format", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./format")>()),
+vi.mock("../shared/format", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/format")>()),
   runningInApp: () => true,
 }));
 const revealItemInDir = vi.hoisted(() => vi.fn());

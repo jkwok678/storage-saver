@@ -1,6 +1,6 @@
+import { formatBytes, isWithin } from "../shared/format";
+import { CheckIcon, FileIcon, FolderIcon, RevealIcon, TrashIcon } from "../shared/icons";
 import type { AiRecommendation, TrashOutcome } from "./aiTypes";
-import { formatBytes, isWithin } from "./format";
-import { CheckIcon, FileIcon, FolderIcon, RevealIcon, TrashIcon } from "./icons";
 import type { TrashState } from "./useTrash";
 
 type Props = {

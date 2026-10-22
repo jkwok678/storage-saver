@@ -12,8 +12,8 @@ import {
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const app = vi.hoisted(() => ({ running: true }));
-vi.mock("./format", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./format")>()),
+vi.mock("../shared/format", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/format")>()),
   runningInApp: () => app.running,
 }));
 

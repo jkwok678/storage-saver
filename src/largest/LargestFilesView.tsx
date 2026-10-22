@@ -1,8 +1,15 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
-import { errorText, formatBytes, parentPath, runningInApp, type TrashedItem } from "./format";
-import { FileIcon } from "./icons";
+import {
+  errorText,
+  formatBytes,
+  parentPath,
+  runningInApp,
+  type TrashedItem,
+} from "../shared/format";
+import { FileIcon } from "../shared/icons";
 import { type LargestFile, useLargestScan } from "./useLargestScan";
+import "./largest.css";
 
 function scanStatus(error: string | null, scanning: boolean, scanned: number, found: number) {
   if (error) return error;

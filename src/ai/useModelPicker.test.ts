@@ -5,8 +5,8 @@ import { useModelPicker } from "./useModelPicker";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("./format", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./format")>()),
+vi.mock("../shared/format", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/format")>()),
   runningInApp: () => true,
 }));
 

@@ -1,5 +1,5 @@
+import { SparklesIcon } from "../shared/icons";
 import type { ChatMessage } from "./aiTypes";
-import { SparklesIcon } from "./icons";
 import { renderMarkdown } from "./markdown";
 import { RecommendationCard } from "./RecommendationCard";
 import type { TrashState } from "./useTrash";

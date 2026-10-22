@@ -4,8 +4,9 @@ import {
   PROVIDER_IDS,
   providerDotClass,
   providerStatusText,
-} from "./aiProviders";
-import { runningInApp } from "./format";
+} from "../ai/aiProviders";
+import { runningInApp } from "../shared/format";
+import "./settings.css";
 
 type Props = {
   ai: AiProviders;

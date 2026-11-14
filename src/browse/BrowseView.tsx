@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Crumbs } from "../shared/Crumbs";
 import {
-  breadcrumbs,
   formatBytes,
   formatDate,
   isWithin,
@@ -75,7 +75,7 @@ function BrowseView({ initialPath, onPathChange, available, trashed }: Props) {
   return (
     <section className="browse">
       <div className="location">
-        <Breadcrumbs path={path} onOpen={open} />
+        <Crumbs path={path} onNavigate={open} />
         <div className="actions">
           <p className="status" aria-live="polite">
             {scanStatus(entries, scanning, scanError)}
@@ -129,25 +129,6 @@ function BrowseView({ initialPath, onPathChange, available, trashed }: Props) {
         </footer>
       </div>
     </section>
-  );
-}
-
-function Breadcrumbs({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
-  return (
-    <nav className="crumbs" aria-label="Folder">
-      {breadcrumbs(path).map((crumb, index) => (
-        <span key={crumb.path} className="crumb">
-          {index > 0 && <span className="sep">/</span>}
-          {crumb.path === path ? (
-            <span className="current">{crumb.label}</span>
-          ) : (
-            <button type="button" onClick={() => onOpen(crumb.path)}>
-              {crumb.label}
-            </button>
-          )}
-        </span>
-      ))}
-    </nav>
   );
 }
 

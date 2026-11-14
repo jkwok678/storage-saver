@@ -6,6 +6,7 @@ import {
   providerStatusText,
 } from "../ai/aiProviders";
 import { runningInApp } from "../shared/format";
+import { platform } from "../shared/platform";
 import "./settings.css";
 
 type Props = {
@@ -22,7 +23,7 @@ function SettingsView({ ai }: Props) {
               <h2>AI accounts</h2>
               <p>
                 The AI Advisor uses your own Claude Code or Cursor subscription through its
-                command-line tool on this Mac.
+                command-line tool on this {platform().machine}.
               </p>
             </div>
             <button
@@ -57,7 +58,7 @@ function SettingsView({ ai }: Props) {
                         className="settings-btn"
                         onClick={() => ai.disconnect(id)}
                         disabled={ai.busy !== null}
-                        title={`Signs ${provider.name} out on this Mac, including in the terminal`}
+                        title={`Signs ${provider.name} out on this ${platform().machine}, including in the terminal`}
                       >
                         {isBusy ? "Signing out…" : "Sign out"}
                       </button>

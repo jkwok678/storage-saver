@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import DiskMapView from "./DiskMapView";
 import type { SunburstScan } from "./useSunburstScan";
 import { useSunburstScan } from "./useSunburstScan";
@@ -158,5 +159,18 @@ describe("DiskMapView", () => {
     expect(onPathChange).not.toHaveBeenCalled();
     const lastReq = vi.mocked(useSunburstScan).mock.lastCall?.[0];
     expect(lastReq?.path).toBe("/Users/alice");
+  });
+});
+
+describe("DiskMapView on Windows", () => {
+  useWindowsUserAgent();
+
+  it("navigates from a drive back up to This PC", () => {
+    scanState();
+    const onPathChange = vi.fn();
+    render(<DiskMapView initialPath="C:\\" onPathChange={onPathChange} available={null} />);
+    fireEvent.click(screen.getByRole("button", { name: "This PC" }));
+    expect(onPathChange).toHaveBeenCalledWith("");
+    expect(vi.mocked(useSunburstScan).mock.lastCall?.[0].path).toBe("");
   });
 });

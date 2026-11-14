@@ -81,10 +81,17 @@ jobs:
           components: rustfmt
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
-  # The app targets macOS (libc disk APIs, Trash), so clippy and tests run there.
+  # The backend has a macOS and a Windows implementation, so clippy and tests run on both.
   rust-clippy:
-    name: cargo clippy
-    runs-on: macos-latest
+    name: cargo clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -93,21 +100,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: clippy
+          key: clippy-${{ matrix.os }}
       # tauri::generate_context! requires frontendDist to exist at compile time.
       - run: mkdir -p dist
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
   rust-test:
-    name: cargo test
-    runs-on: macos-latest
+    name: cargo test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: test
+          key: test-${{ matrix.os }}
       - run: mkdir -p dist
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
@@ -139,4 +153,36 @@ jobs:
         with:
           name: storage-saver-macos
           path: src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Tauri build (Windows)
+    needs:
+      - typecheck
+      - biome
+      - test
+      - fallow-dead-code
+      - fallow-dupes
+      - fallow-health
+      - rust-fmt
+      - rust-clippy
+      - rust-test
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: build-windows
+      # Unsigned per-user NSIS installer; beforeBuildCommand runs the frontend build.
+      - run: pnpm tauri build --ci --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storage-saver-windows
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error

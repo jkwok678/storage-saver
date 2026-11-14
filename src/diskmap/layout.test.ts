@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Entry } from "../browse/entries";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import {
   type LayoutNode,
   layoutSunburst,
@@ -286,5 +287,20 @@ describe("layoutSunburst", () => {
   it("OTHER_THRESHOLD is 0.5%", () => {
     // Verify the constant
     expect(OTHER_THRESHOLD).toBe(0.005);
+  });
+});
+
+describe("layoutSunburst free space on Windows", () => {
+  useWindowsUserAgent();
+
+  it.each([
+    ["C:\\", true],
+    ["D:\\", true],
+    ["C:\\Users", false],
+    ["", false],
+  ])("free arc at %j is %s", (rootPath, expected) => {
+    const listings = new Map([[rootPath, [dir("a", 1e10)]]]);
+    const nodes = layoutSunburst({ rootPath, listings, available: 8e10 });
+    expect(nodes.some((n) => n.kind === "free")).toBe(expected);
   });
 });

@@ -8,9 +8,9 @@ export type DiskSummary = {
   used: number;
 };
 
-/** Reads boot-disk capacity on mount and whenever `refresh` is called. */
-export function useDiskSummary() {
-  const [summary, setSummary] = useState<DiskSummary | null>(null);
+/** Reads the capacity of the volume at `path` on mount, when it changes, and on `refresh`. */
+export function useDiskSummary(path: string) {
+  const [result, setResult] = useState<{ path: string; summary: DiskSummary } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [run, setRun] = useState(0);
 
@@ -21,10 +21,10 @@ export function useDiskSummary() {
       return;
     }
     let active = true;
-    invoke<DiskSummary>("disk_summary")
+    invoke<DiskSummary>("disk_summary", { path })
       .then((next) => {
         if (!active) return;
-        setSummary(next);
+        setResult({ path, summary: next });
         setError(null);
       })
       .catch((reason: unknown) => {
@@ -33,9 +33,10 @@ export function useDiskSummary() {
     return () => {
       active = false;
     };
-  }, [run]);
+  }, [path, run]);
 
   const refresh = useCallback(() => setRun((current) => current + 1), []);
 
+  const summary = result?.path === path ? result.summary : null;
   return { summary, error, refresh };
 }

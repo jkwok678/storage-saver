@@ -6,11 +6,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::bulk::{BulkEntry, read_dir_bulk};
-use super::listing::{allocated_bytes, is_excluded, is_real_dir};
+use super::listing::is_real_dir;
 use super::lock;
 use super::scan_cancelled;
 use super::tree::{Tree, Trouble};
+use crate::platform::{BulkEntry, FileKey, allocated_bytes, is_excluded, read_dir_bulk};
 
 #[derive(Debug)]
 pub(super) struct Cancelled;
@@ -19,7 +19,7 @@ pub(super) struct Cancelled;
 pub(super) fn measure_tree(
     path: &Path,
     generation: Option<u64>,
-    links: &Arc<Mutex<HashSet<(u64, u64)>>>,
+    links: &Arc<Mutex<HashSet<FileKey>>>,
 ) -> Result<Tree, Cancelled> {
     if generation.is_some_and(scan_cancelled) {
         return Err(Cancelled);
@@ -30,7 +30,7 @@ pub(super) fn measure_tree(
         Ok(metadata) if is_real_dir(&metadata.file_type()) => {}
         Ok(metadata) => {
             if metadata.is_file() {
-                tree.nodes[0].own = allocated_bytes(&metadata);
+                tree.nodes[0].own = allocated_bytes(path, &metadata);
             }
             tree.roll_up();
             return Ok(tree);
@@ -64,7 +64,7 @@ pub(super) fn measure_tree(
 /// What every folder read in one walk shares.
 struct Walk {
     tree: Mutex<Tree>,
-    links: Arc<Mutex<HashSet<(u64, u64)>>>,
+    links: Arc<Mutex<HashSet<FileKey>>>,
     generation: Option<u64>,
 }
 
@@ -83,20 +83,15 @@ fn visit<'s>(scope: &rayon::Scope<'s>, walk: &'s Walk, dir: PathBuf, id: u32) {
 
     let mut own = 0u64;
     let mut trouble = Trouble::default();
+    let mut keyed = Vec::new();
     let mut folders = Vec::new();
     let read = read_dir_bulk(&dir, |entry| match entry {
         BulkEntry::File {
             bytes,
-            links,
-            dev,
-            file_id,
+            key: Some(key),
             ..
-        } => {
-            let repeat = links > 1 && !lock(&walk.links).insert((dev, file_id));
-            if !repeat {
-                own = own.saturating_add(bytes);
-            }
-        }
+        } => keyed.push((key, bytes)),
+        BulkEntry::File { bytes, .. } => own = own.saturating_add(bytes),
         BulkEntry::Folder(name) => folders.push(name),
         BulkEntry::Other => {}
         BulkEntry::Error(errno) => trouble.note_io(&io::Error::from_raw_os_error(errno)),
@@ -105,6 +100,14 @@ fn visit<'s>(scope: &rayon::Scope<'s>, walk: &'s Walk, dir: PathBuf, id: u32) {
         trouble.note_io(&err);
     }
     folders.retain(|name| !is_excluded(&dir.join(name)));
+    if !keyed.is_empty() {
+        let mut set = lock(&walk.links);
+        for (key, bytes) in keyed {
+            if set.insert(key) {
+                own = own.saturating_add(bytes);
+            }
+        }
+    }
 
     let ids: Vec<u32> = {
         let mut tree = lock(&walk.tree);

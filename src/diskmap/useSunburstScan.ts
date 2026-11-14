@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Entry } from "../browse/entries";
 import { runningInApp } from "../shared/format";
+import { platform } from "../shared/platform";
 import { useStopOnUnmount } from "../shared/useStopOnUnmount";
 import { MAX_RINGS, MIN_EXPAND_TURN } from "./layout";
 import {
@@ -60,7 +61,7 @@ function applySizeUpdates(listings: Map<string, Entry[]>, buffer: SizeBuffer): v
 
 /** Child folders of a finished listing that are wide enough to show a ring. */
 function childQueueItems(item: QueueItem, entries: Entry[]): QueueItem[] {
-  if (item.depth + 1 >= MAX_RINGS) return [];
+  if (item.depth + 1 >= MAX_RINGS || platform().isVirtualRoot(item.path)) return [];
   const total = entries.reduce((sum, entry) => sum + (entry.bytes ?? 0), 0);
   if (total === 0) return [];
   const children: QueueItem[] = [];

@@ -1,7 +1,10 @@
+use super::prompt::build_system_instructions;
 use super::provider::{extract_json_object, is_model_id, parse_cursor_models};
 use super::recommend::{RawRecommendation, extract_recommendations, resolve_recommendations};
 use super::stream::{JsonStream, visible_streaming_prefix};
 use super::types::AiModel;
+use crate::platform::ADVISOR_RULES;
+use crate::scan::{DiskSummary, StorageSnapshot};
 
 #[test]
 fn parses_cursor_model_list() {
@@ -146,6 +149,7 @@ fn reads_claude_stream_json_error_result() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn drops_protected_and_parent_dir_recommendations() {
     let raw = |path: &str| RawRecommendation {
@@ -162,4 +166,71 @@ fn drops_protected_and_parent_dir_recommendations() {
         &|| false,
     );
     assert!(recs.is_empty(), "{recs:?}");
+}
+
+#[test]
+fn prompt_lists_each_volume_and_names_the_top_level() {
+    let disk = |used: u64, total: u64| DiskSummary {
+        total,
+        available: total - used,
+        used,
+    };
+    let gb = 1024 * 1024 * 1024;
+    let snapshot = StorageSnapshot {
+        volumes: vec![
+            ("Boot Disk".into(), disk(5 * gb, 10 * gb)),
+            ("Data (D:)".into(), disk(gb, 4 * gb)),
+        ],
+        current_path: Some(String::new()),
+        current_items: Vec::new(),
+        top_folders: Vec::new(),
+        dense_folders: Vec::new(),
+        largest_files: Vec::new(),
+        notable_locations: Vec::new(),
+    };
+    let text = build_system_instructions(&snapshot);
+    let data = text.strip_prefix(ADVISOR_RULES).unwrap();
+    assert_eq!(
+        data,
+        "Boot Disk: 50.0% full — 5.0 GB used of 10.0 GB total (5.0 GB available)\n\
+         Data (D:): 25.0% full — 1.0 GB used of 4.0 GB total (3.0 GB available)\n\n\
+         Currently Viewed Folder: This PC\n"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_recommendation_paths_normalise() {
+    let raw = |path: &str| RawRecommendation {
+        path: path.into(),
+        safety: "safe".into(),
+        reason: String::new(),
+    };
+    let home = crate::platform::home_dir().unwrap();
+    let recs = resolve_recommendations(
+        vec![
+            raw("C:/storage-saver-missing/Cache/"),
+            raw("~/storage-saver-missing"),
+            raw("~\\storage-saver-missing-too"),
+            raw("c:/windows/system32"),
+            raw("C:/"),
+            raw("C:foo"),
+            raw("/rooted"),
+            raw("C:/a/../b"),
+            raw("//server/share/x"),
+            raw("C:/bad\u{7}name"),
+        ],
+        &|| false,
+    );
+    let paths: Vec<&str> = recs.iter().map(|rec| rec.path.as_str()).collect();
+    let home = crate::platform::winpath::normalize(&home.to_string_lossy()).unwrap();
+    let mut expected = vec![
+        "C:\\storage-saver-missing\\Cache".to_string(),
+        format!("{home}\\storage-saver-missing"),
+        format!("{home}\\storage-saver-missing-too"),
+    ];
+    expected.sort();
+    let mut paths: Vec<String> = paths.into_iter().map(String::from).collect();
+    paths.sort();
+    assert_eq!(paths, expected);
 }

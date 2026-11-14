@@ -1,51 +1,34 @@
 //! Instructions and conversation text sent with an advisor question.
 
 use super::types::ChatTurn;
+use crate::platform::ADVISOR_RULES;
 use crate::scan::StorageSnapshot;
 
 pub(super) fn build_system_instructions(snapshot: &StorageSnapshot) -> String {
     let mut ctx = String::with_capacity(4096);
-    ctx.push_str(
-        "You are the Storage Saver AI Advisor for macOS. Your job is to help the user understand what is taking up disk space on their Mac and identify what they can and should delete.\n\n\
-         Rules:\n\
-         1. Base your analysis on the scanned storage data below, and use your read-only file/directory tools if you need to inspect specific directories further.\n\
-         2. Never attempt to delete, modify, or move files yourself. The user will review and move items to Trash using Storage Saver's UI.\n\
-         3. Clearly distinguish between:\n\
-            - `safe`: Safe to delete anytime without losing personal data (e.g. ~/Library/Caches/*, Xcode DerivedData, npm/cargo/homebrew caches, old logs, ~/.Trash).\n\
-            - `caution`: Worth reviewing before deleting (e.g. large files in ~/Downloads, old .dmg/.zip installers, Docker/VM images, old project node_modules/target build folders, large videos).\n\
-            - System/protected paths (/System, /Library, active app bundles) that should NOT be deleted.\n\
-         4. Mention concrete file/folder paths and their human-readable sizes in your explanation.\n\
-         5. IMPORTANT: Whenever you recommend specific files or folders that the user can delete or review for deletion, include a fenced `recommendations` JSON block at the VERY END of your response in this exact format:\n\
-         ```recommendations\n\
-         [\n\
-           {\n\
-             \"path\": \"/Users/example/Library/Caches/com.example.app\",\n\
-             \"safety\": \"safe\",\n\
-             \"reason\": \"App cache that will be regenerated automatically if needed.\"\n\
-           }\n\
-         ]\n\
-         ```\n\
-         Only include real, absolute paths on this Mac in the `recommendations` block.\n\n\
-         === SCANNED STORAGE DATA ===\n",
-    );
+    ctx.push_str(ADVISOR_RULES);
 
-    if let Some(disk) = &snapshot.disk {
+    for (label, disk) in &snapshot.volumes {
         let pct = if disk.total > 0 {
             (disk.used as f64 / disk.total as f64) * 100.0
         } else {
             0.0
         };
         ctx.push_str(&format!(
-            "Boot Disk: {:.1}% full — {} used of {} total ({} available)\n\n",
+            "{label}: {:.1}% full — {} used of {} total ({} available)\n",
             pct,
             human_bytes(disk.used),
             human_bytes(disk.total),
             human_bytes(disk.available)
         ));
     }
+    if !snapshot.volumes.is_empty() {
+        ctx.push('\n');
+    }
 
     if let Some(curr) = &snapshot.current_path {
-        ctx.push_str(&format!("Currently Viewed Folder: {curr}\n"));
+        let shown = if curr.is_empty() { "This PC" } else { curr };
+        ctx.push_str(&format!("Currently Viewed Folder: {shown}\n"));
         if !snapshot.current_items.is_empty() {
             ctx.push_str("Items in Current Folder (sorted by size):\n");
             for item in &snapshot.current_items {

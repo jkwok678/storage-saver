@@ -1,6 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Entry } from "../browse/entries";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import { MIN_EXPAND_TURN } from "./layout";
 import type { ScanHandlers, ScanRequest } from "./scanDirectory";
 import { useSunburstScan } from "./useSunburstScan";
@@ -280,5 +281,20 @@ describe("useSunburstScan", () => {
     act(() => calls[0].h.onDone());
     // child fraction = childBytes/childBytes = 1.0 ≥ MIN_EXPAND_TURN → enqueued
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("useSunburstScan on Windows", () => {
+  useWindowsUserAgent();
+
+  it("shows one ring of drives at This PC without walking into them", () => {
+    const calls = captureStarts();
+    renderScan({ path: "", refresh: false });
+    const drive = { ...entry("C", 5e10), path: "C:\\" };
+    act(() => {
+      calls[0].h.onStarted([drive]);
+      calls[0].h.onDone();
+    });
+    expect(calls).toHaveLength(1);
   });
 });

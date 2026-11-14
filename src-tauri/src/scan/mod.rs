@@ -3,20 +3,22 @@
 //! Finished scans keep their totals here. Listing a folder, ranking files, and the advisor
 //! snapshot read those totals instead of walking the disk again.
 
-mod bulk;
 mod directory;
 mod largest;
-mod listing;
+pub(crate) mod listing;
 mod snapshot;
-mod trash;
-mod tree;
+pub(crate) mod trash;
+pub(crate) mod tree;
 mod types;
 mod walk;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use tauri::ipc::Channel;
+
+use crate::platform;
 
 pub use snapshot::{inspect_path_size, storage_snapshot};
 pub use trash::{is_protected_path, trash_path_into};
@@ -33,11 +35,16 @@ static SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// ranking can be stopped independently when the view changes.
 static LARGEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// Folder totals from finished scans. Opening a folder reads them instead of walking it again.
-static STORED: Mutex<Option<Tree>> = Mutex::new(None);
+/// Folder totals from finished scans, one slot per volume so viewing one does not discard
+/// another's. Opening a folder reads them instead of walking it again.
+static STORED: [Mutex<Option<Tree>>; 27] = [const { Mutex::new(None) }; 27];
 
 /// Latest ranked largest files from the Largest Files scan, shared with AI context.
 static STORED_LARGEST: Mutex<Vec<LargestFile>> = Mutex::new(Vec::new());
+
+fn stored_for(path: &Path) -> &'static Mutex<Option<Tree>> {
+    &STORED[platform::volume_slot(path)]
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -63,8 +70,11 @@ fn largest_cancelled(generation: u64) -> bool {
 }
 
 #[tauri::command]
-pub fn disk_summary() -> Result<DiskSummary, String> {
-    listing::read_disk_summary()
+pub fn disk_summary(path: Option<String>) -> Result<DiskSummary, String> {
+    let path = path
+        .map(|path| platform::normalize_input(&path))
+        .transpose()?;
+    platform::volume_summary(path.as_deref().map(Path::new))
 }
 
 #[tauri::command]

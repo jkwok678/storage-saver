@@ -1,4 +1,5 @@
 pub mod ai;
+mod platform;
 pub mod scan;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

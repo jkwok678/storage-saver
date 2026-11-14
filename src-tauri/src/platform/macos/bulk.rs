@@ -7,20 +7,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-/// One entry from `getattrlistbulk`.
-pub(super) enum BulkEntry {
-    File {
-        name: String,
-        bytes: u64,
-        links: u32,
-        dev: u64,
-        file_id: u64,
-    },
-    Folder(String),
-    /// Links, sockets and the like. They take no space of their own worth counting.
-    Other,
-    Error(i32),
-}
+use crate::platform::BulkEntry;
 
 // Not in the libc crate. Values from <sys/attr.h> and <sys/vnode.h>.
 const ATTR_CMN_ERROR: u32 = 0x2000_0000;
@@ -42,7 +29,7 @@ thread_local! {
 
 /// List `dir` with `getattrlistbulk`. One call returns the type, allocated size, link count
 /// and file id of a whole batch of entries, so files cost no `lstat` of their own.
-pub(super) fn read_dir_bulk(dir: &Path, mut each: impl FnMut(BulkEntry)) -> io::Result<()> {
+pub(crate) fn read_dir_bulk(dir: &Path, mut each: impl FnMut(BulkEntry)) -> io::Result<()> {
     let path = CString::new(dir.as_os_str().as_bytes())
         .map_err(|err| io::Error::new(ErrorKind::InvalidInput, err))?;
     // SAFETY: path is a valid C string.
@@ -176,9 +163,7 @@ fn parse_bulk_entry(entry: &[u8]) -> Option<BulkEntry> {
             BulkEntry::File {
                 name: String::from_utf8_lossy(name).into_owned(),
                 bytes,
-                links,
-                dev: u64::from(dev),
-                file_id,
+                key: (links > 1).then_some((u64::from(dev), file_id)),
             }
         }
         _ => BulkEntry::Other,

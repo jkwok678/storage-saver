@@ -7,12 +7,13 @@ use std::sync::{Arc, Mutex};
 
 use tauri::ipc::Channel;
 
-use super::listing::list_children;
+use super::listing::volume_listing;
 use super::lock;
 use super::tree::{MeasureError, Tree};
 use super::types::{ChildEntry, ScanEvent};
 use super::walk::{measure_tree, worker_count};
-use super::{SCAN_GENERATION, STORED, cancel_if_current, scan_cancelled};
+use super::{SCAN_GENERATION, cancel_if_current, scan_cancelled, stored_for};
+use crate::platform::{self, list_children};
 
 pub(super) async fn scan_directory(
     path: String,
@@ -28,13 +29,30 @@ pub(super) async fn scan_directory(
 
 fn run_scan(path: String, refresh: bool, on_event: Channel<ScanEvent>) -> Result<(), String> {
     let generation = SCAN_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    let path = platform::normalize_input(&path)?;
+    if platform::VIRTUAL_ROOT == Some(path.as_str()) {
+        scan_virtual_root(|event| on_event.send(event).is_ok());
+        return Ok(());
+    }
     let root = PathBuf::from(&path);
     if !root.is_absolute() {
         return Err("path must be absolute".into());
     }
-    scan_into(&STORED, &root, refresh, Some(generation), |event| {
-        on_event.send(event).is_ok()
-    })
+    scan_into(
+        stored_for(&root),
+        &root,
+        refresh,
+        Some(generation),
+        |event| on_event.send(event).is_ok(),
+    )
+}
+
+/// The top level lists the volumes. Their totals are not walked, so nothing is stored.
+pub(super) fn scan_virtual_root(mut send: impl FnMut(ScanEvent) -> bool) {
+    let entries = volume_listing();
+    if send(ScanEvent::Started { entries }) {
+        send(ScanEvent::Done);
+    }
 }
 
 /// List `root`, fill in what the stored tree already knows, and walk only the folders it

@@ -217,6 +217,9 @@ pub(crate) const CLI_EXTENSIONS: &[&str] = &[""];
 
 pub(crate) fn prepare_command(_cmd: &mut Command) {}
 
+/// Whether the Claude CLI gets its prompts from a file and stdin rather than arguments.
+pub(crate) const PROMPT_VIA_STDIN: bool = false;
+
 /// What it takes to stop a running child later.
 #[derive(Clone, PartialEq)]
 pub(crate) struct ChildHandle(u32);

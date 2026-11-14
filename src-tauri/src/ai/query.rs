@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::ipc::Channel;
 
 use super::cli::{command_with_env, find_binary};
+use super::invocation::{PromptMode, TempPromptFile, claude_invocation, feed_stdin};
 use super::prompt::{build_conversation_prompt, build_system_instructions};
 use super::provider::{CLAUDE_EFFORTS, is_model_id};
 use super::recommend::{extract_recommendations, resolve_recommendations};
@@ -115,6 +116,8 @@ fn run_ai_query(
         .filter(|p| Path::new(p).is_dir())
         .unwrap_or(&home_dir);
 
+    let mut prompt_file: Option<TempPromptFile> = None;
+    let mut stdin_text: Option<String> = None;
     let mut cmd = match provider {
         "claude" => {
             let binary = find_binary(&["claude"]).ok_or_else(|| {
@@ -125,35 +128,27 @@ fn run_ai_query(
             });
             let mut c = command_with_env(&binary);
             c.current_dir(work_dir);
+            let mode = if platform::PROMPT_VIA_STDIN {
+                let file = TempPromptFile::create(&system_context)
+                    .map_err(|err| format!("Failed to write the prompt file: {err}"))?;
+                PromptMode::Stdin {
+                    system_file: prompt_file.insert(file).path(),
+                }
+            } else {
+                PromptMode::Argv
+            };
             // Text output arrives only once the whole answer is done, so stream JSON events instead.
-            c.args([
-                "-p",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-                "--no-session-persistence",
-                "--tools",
-                "Read,Glob,Grep",
-                "--allowedTools",
-                "Read,Glob,Grep",
-                "--permission-prompts",
-                "none",
-                "--system-prompt",
+            let invocation = claude_invocation(
+                mode,
                 &system_context,
-                "--add-dir",
+                &conversation_prompt,
                 &home_dir,
-            ]);
-            if work_dir != home_dir {
-                c.args(["--add-dir", work_dir]);
-            }
-            if let Some(model) = model {
-                c.args(["--model", model]);
-            }
-            if let Some(effort) = effort {
-                c.args(["--effort", effort]);
-            }
-            c.arg("--").arg(&conversation_prompt);
+                work_dir,
+                model,
+                effort,
+            );
+            c.args(&invocation.args);
+            stdin_text = invocation.stdin;
             c
         }
         "cursor" => {
@@ -189,13 +184,21 @@ fn run_ai_query(
         other => return Err(format!("Unsupported AI provider: {other}")),
     };
 
-    cmd.stdin(Stdio::null());
+    cmd.stdin(if stdin_text.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|err| format!("Failed to start {provider}: {err}"))?;
+
+    if let (Some(text), Some(stdin)) = (stdin_text, child.stdin.take()) {
+        feed_stdin(stdin, text);
+    }
 
     let handle = platform::track_child(&child);
     if let Ok(mut guard) = RUNNING_CHILD.lock() {
@@ -243,7 +246,9 @@ fn run_ai_query(
 
     // Cleared before reaping, so a stop never signals a process id the system has reused.
     clear_running_child(&handle);
-    let status = child.wait().map_err(|err| err.to_string())?;
+    let status = child.wait();
+    drop(prompt_file);
+    let status = status.map_err(|err| err.to_string())?;
     let stderr_output = stderr_thread.join().unwrap_or_default();
 
     if cancelled() {

@@ -21,6 +21,10 @@ pub(crate) use process::{ChildHandle, prepare_command, terminate, track_child};
 pub(crate) use recycle::{is_protected_path, move_to_trash, trash_dir_for};
 pub(crate) use volumes::{volume_summary, volumes};
 
+/// Whether the Claude CLI gets its prompts from a file and stdin rather than arguments. Windows
+/// caps command lines, and `.cmd` shims pass through cmd.exe.
+pub(crate) const PROMPT_VIA_STDIN: bool = true;
+
 /// The path that lists every volume instead of a folder.
 pub(crate) const VIRTUAL_ROOT: Option<&str> = Some("");
 

@@ -154,3 +154,35 @@ jobs:
           name: storage-saver-macos
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+  build-windows:
+    name: Tauri build (Windows)
+    needs:
+      - typecheck
+      - biome
+      - test
+      - fallow-dead-code
+      - fallow-dupes
+      - fallow-health
+      - rust-fmt
+      - rust-clippy
+      - rust-test
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-web
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: build-windows
+      # Unsigned per-user NSIS installer; beforeBuildCommand runs the frontend build.
+      - run: pnpm tauri build --ci --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storage-saver-windows
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error

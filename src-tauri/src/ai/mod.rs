@@ -1,6 +1,7 @@
 //! Advisor questions answered by the Claude Code or Cursor CLI.
 
 mod cli;
+mod invocation;
 mod prompt;
 mod provider;
 mod query;

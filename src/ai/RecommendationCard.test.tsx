@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import type { AiRecommendation, TrashOutcome } from "./aiTypes";
 import { RecommendationCard } from "./RecommendationCard";
 import type { TrashState } from "./useTrash";
@@ -98,5 +99,24 @@ describe("RecommendationCard", () => {
     );
     expect(screen.getByText("Moved to Trash")).toBeTruthy();
     expect(screen.queryByText(/Put Back/)).toBeNull();
+  });
+});
+
+describe("RecommendationCard on Windows", () => {
+  useWindowsUserAgent();
+
+  it("uses File Explorer and Recycle Bin wording", () => {
+    const trash = trashState();
+    const { unmount } = render(<RecommendationCard rec={rec} messageId="a-1" trash={trash} />);
+    expect(screen.getByRole("button", { name: "Show in File Explorer" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Move to Recycle Bin" }).title).toBe(
+      "Move this file or folder to the Recycle Bin",
+    );
+    unmount();
+    renderCard(trashState({ trashedPaths: new Map([[rec.path, outcome(4096, true)]]) }));
+    expect(screen.getByText("Moved to Recycle Bin")).toBeTruthy();
+    expect(
+      screen.getByText("Empty the Recycle Bin to free 4.00 KB. Restore it from the Recycle Bin."),
+    ).toBeTruthy();
   });
 });

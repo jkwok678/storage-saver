@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText, isWithin, runningInApp } from "../shared/format";
+import { platform } from "../shared/platform";
 import { useStopOnUnmount } from "../shared/useStopOnUnmount";
 
 export type LargestFile = {
@@ -15,7 +16,7 @@ type LargestEvent =
 
 type LargestRequest = { path: string; limit: number };
 
-const fullDiskScan = (): LargestRequest => ({ path: "/", limit: 100 });
+const fullDiskScan = (): LargestRequest => ({ path: platform().rootPath, limit: 100 });
 
 /** Walks the whole disk, streaming the running top-N largest files. */
 export function useLargestScan() {

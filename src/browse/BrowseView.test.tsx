@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import BrowseView from "./BrowseView";
 import type { Entry } from "./entries";
 import { useDirectoryScan } from "./useDirectoryScan";
@@ -113,5 +114,21 @@ describe("BrowseView", () => {
     scanState({ entries: [] });
     renderView();
     expect(screen.getByText("This folder is empty.")).toBeTruthy();
+  });
+});
+
+describe("BrowseView on Windows", () => {
+  useWindowsUserAgent();
+
+  it("shows the This PC crumb and drive rows, and opens a drive", () => {
+    const drive = entry("Local Disk (C:)", { path: "C:\\", isDir: true, bytes: 4096 });
+    scanState({ entries: [drive] });
+    const onPathChange = vi.fn();
+    render(<BrowseView initialPath="" onPathChange={onPathChange} available={null} />);
+    expect(screen.getByText("This PC", { selector: ".current" })).toBeTruthy();
+    expect(rowNames()).toEqual(["Local Disk (C:)›"]);
+    fireEvent.doubleClick(screen.getByText("Local Disk (C:)").closest("tr") as HTMLElement);
+    expect(onPathChange).toHaveBeenCalledWith("C:\\");
+    expect(screen.getByRole("button", { name: "This PC" })).toBeTruthy();
   });
 });

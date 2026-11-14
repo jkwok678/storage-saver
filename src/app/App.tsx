@@ -7,6 +7,7 @@ import LargestFilesView from "../largest/LargestFilesView";
 import SettingsView from "../settings/SettingsView";
 import { formatBytes, type TrashedItem } from "../shared/format";
 import { GearIcon, SparklesIcon } from "../shared/icons";
+import { platform } from "../shared/platform";
 import { type DiskSummary, useDiskSummary } from "./useDiskSummary";
 import "./App.css";
 
@@ -19,8 +20,9 @@ const VIEWS: Array<{ key: View; label: string }> = [
 ];
 
 function App() {
-  const { summary, error, refresh: refreshSummary } = useDiskSummary();
-  const [browsePath, setBrowsePath] = useState("/");
+  const [browsePath, setBrowsePath] = useState(() => platform().rootPath);
+  const volume = platform().volumeOf(browsePath);
+  const { summary, error, refresh: refreshSummary } = useDiskSummary(volume);
   const [view, setView] = useState<View>("browse");
   const [aiOpen, setAiOpen] = useState(false);
   // Mounted on first open and kept, so closing the panel keeps the conversation.
@@ -57,7 +59,7 @@ function App() {
           <h1>Storage</h1>
           <HeaderControls view={view} onView={setView} aiOpen={aiOpen} onToggleAi={toggleAi} />
         </div>
-        <DiskStatus summary={summary} error={error} />
+        <DiskStatus summary={summary} error={error} volume={volume} />
       </header>
 
       <div className={`app-workspace ${aiOpen ? "ai-open" : ""}`}>
@@ -118,18 +120,20 @@ function CurrentView({ view, ai, browsePath, onBrowsePath, available, trashed }:
   );
 }
 
-function DiskStatus({ summary, error }: { summary: DiskSummary | null; error: string | null }) {
-  if (summary) return <Capacity summary={summary} />;
+type DiskStatusProps = { summary: DiskSummary | null; error: string | null; volume: string };
+
+function DiskStatus({ summary, error, volume }: DiskStatusProps) {
+  if (summary) return <Capacity summary={summary} volume={volume} />;
   return <p className={error ? "error" : "status"}>{error ?? "Reading disk…"}</p>;
 }
 
-/** ⌘, opens Settings, as in other Mac apps. */
+/** ⌘, (Ctrl+, on Windows) opens Settings. */
 function useSettingsShortcut(openSettings: () => void) {
   const open = useRef(openSettings);
   open.current = openSettings;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey && event.key === ",") {
+      if (platform().isSettingsShortcut(event)) {
         event.preventDefault();
         open.current();
       }
@@ -172,7 +176,7 @@ function HeaderControls({ view, onView, aiOpen, onToggleAi }: HeaderControlsProp
         aria-pressed={view === "settings"}
         aria-label="Settings"
         onClick={() => onView(view === "settings" ? "browse" : "settings")}
-        title="Settings (⌘,)"
+        title={`Settings (${platform().shortcutLabel})`}
       >
         <GearIcon />
       </button>
@@ -180,7 +184,7 @@ function HeaderControls({ view, onView, aiOpen, onToggleAi }: HeaderControlsProp
   );
 }
 
-function Capacity({ summary }: { summary: DiskSummary }) {
+function Capacity({ summary, volume }: { summary: DiskSummary; volume: string }) {
   const usedPct = summary.total > 0 ? (summary.used / summary.total) * 100 : 0;
   return (
     <>
@@ -189,7 +193,7 @@ function Capacity({ summary }: { summary: DiskSummary }) {
         min={0}
         max={summary.total}
         value={summary.used}
-        aria-label="Boot disk usage"
+        aria-label={platform().diskLabel(volume)}
       />
       <p className="capacity-label">
         {Math.round(usedPct)}% full · {formatBytes(summary.used)} used ·{" "}

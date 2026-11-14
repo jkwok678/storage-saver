@@ -8,12 +8,14 @@ import {
   type TrashedItem,
 } from "../shared/format";
 import { FileIcon } from "../shared/icons";
+import { platform } from "../shared/platform";
 import { type LargestFile, useLargestScan } from "./useLargestScan";
 import "./largest.css";
 
 function scanStatus(error: string | null, scanning: boolean, scanned: number, found: number) {
   if (error) return error;
-  if (scanning) return `Scanning this Mac · ${scanned.toLocaleString()} files read`;
+  if (scanning)
+    return `Scanning this ${platform().machine} · ${scanned.toLocaleString()} files read`;
   return `Top ${found} of ${scanned.toLocaleString()} files`;
 }
 
@@ -84,7 +86,7 @@ function LargestFilesView({ trashed }: Props = {}) {
         </div>
         <footer className="finder-status">
           <span>{scanning ? "Largest files found so far" : `Largest ${files.length} files`}</span>
-          <span>Double-click a file to show it in Finder</span>
+          <span>Double-click a file to show it in {platform().fileManager}</span>
         </footer>
       </div>
     </section>
@@ -104,7 +106,7 @@ function LargestRow({ file, rank, maxBytes, onReveal }: LargestRowProps) {
       <button
         type="button"
         className="largest-row"
-        title={`${file.path}\nDouble-click or press Return to show in Finder`}
+        title={`${file.path}\nDouble-click or press Return to show in ${platform().fileManager}`}
         onDoubleClick={() => onReveal(file.path)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {

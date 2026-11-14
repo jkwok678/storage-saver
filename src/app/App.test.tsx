@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import App from "./App";
 import { useDiskSummary } from "./useDiskSummary";
 
@@ -130,5 +131,25 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "close panel" }));
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByRole("button", { name: "close panel", hidden: true })).toBeTruthy();
+  });
+});
+
+describe("App on Windows", () => {
+  useWindowsUserAgent();
+
+  it("reads the PC disk, labels the meter and opens Settings with Ctrl+,", () => {
+    vi.mocked(useDiskSummary).mockReturnValue({
+      summary: { total: 100 * GB, used: 25 * GB, available: 75 * GB },
+      error: null,
+      refresh,
+    });
+    render(<App />);
+    expect(useDiskSummary).toHaveBeenLastCalledWith("");
+    expect(screen.getByRole("meter", { name: "This PC disk usage" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Settings" }).title).toBe("Settings (Ctrl+,)");
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(screen.queryByText("settings")).toBeNull();
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    expect(screen.getByText("settings")).toBeTruthy();
   });
 });

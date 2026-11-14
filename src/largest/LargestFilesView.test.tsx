@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useWindowsUserAgent } from "../shared/testPlatform";
 import LargestFilesView from "./LargestFilesView";
 import { useLargestScan } from "./useLargestScan";
 
@@ -87,5 +88,16 @@ describe("LargestFilesView", () => {
     scanState();
     rerender(<LargestFilesView />);
     expect(screen.getByText("No files found.")).toBeTruthy();
+  });
+});
+
+describe("LargestFilesView on Windows", () => {
+  useWindowsUserAgent();
+
+  it("names this PC and File Explorer", () => {
+    scanState({ files, scanning: true, scanned: 3 });
+    render(<LargestFilesView />);
+    expect(screen.getByText(/Scanning this PC/)).toBeTruthy();
+    expect(screen.getByText("Double-click a file to show it in File Explorer")).toBeTruthy();
   });
 });

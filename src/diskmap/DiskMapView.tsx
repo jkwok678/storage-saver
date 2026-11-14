@@ -1,14 +1,8 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { type Entry, scanStatus } from "../browse/entries";
-import {
-  breadcrumbs,
-  errorText,
-  isWithin,
-  parentPath,
-  runningInApp,
-  type TrashedItem,
-} from "../shared/format";
+import { Crumbs } from "../shared/Crumbs";
+import { errorText, isWithin, parentPath, runningInApp, type TrashedItem } from "../shared/format";
 import "./diskmap.css";
 import { layoutSunburst, rootTotalBytes } from "./layout";
 import { SunburstChart } from "./SunburstChart";
@@ -38,25 +32,6 @@ function diskMapStatus(s: StatusInput): string {
   if (s.actionError) return s.actionError;
   if (s.scanning && !s.rootScanning) return "Reading nested folders…";
   return scanStatus(s.rootEntries, s.rootScanning, s.scanError);
-}
-
-function Crumbs({ path, onNavigate }: { path: string; onNavigate: (path: string) => void }) {
-  return (
-    <nav className="crumbs" aria-label="Folder">
-      {breadcrumbs(path).map((crumb, index) => (
-        <span key={crumb.path} className="crumb">
-          {index > 0 && <span className="sep">/</span>}
-          {crumb.path === path ? (
-            <span className="current">{crumb.label}</span>
-          ) : (
-            <button type="button" onClick={() => onNavigate(crumb.path)}>
-              {crumb.label}
-            </button>
-          )}
-        </span>
-      ))}
-    </nav>
-  );
 }
 
 function PanelMessage({

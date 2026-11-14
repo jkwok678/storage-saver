@@ -1,3 +1,5 @@
+import { platform } from "./platform";
+
 export function formatBytes(bytes: number): string {
   const units = ["bytes", "KB", "MB", "GB", "TB", "PB"];
   let value = bytes;
@@ -22,13 +24,7 @@ export function runningInApp(): boolean {
 }
 
 export function breadcrumbs(path: string): Array<{ label: string; path: string }> {
-  const crumbs = [{ label: "This Mac", path: "/" }];
-  let current = "";
-  for (const part of path.split("/").filter(Boolean)) {
-    current += `/${part}`;
-    crumbs.push({ label: part, path: current });
-  }
-  return crumbs;
+  return platform().breadcrumbs(path);
 }
 
 const dateFormat = new Intl.DateTimeFormat(undefined, {
@@ -92,8 +88,7 @@ export function kindOf(name: string, isDir: boolean): string {
 }
 
 export function parentPath(path: string): string {
-  const slash = path.lastIndexOf("/");
-  return slash <= 0 ? "/" : path.slice(0, slash);
+  return platform().parentPath(path);
 }
 
 /** The latest item moved to the Trash. `seq` changes even when the same path comes back. */
@@ -101,6 +96,5 @@ export type TrashedItem = { path: string; seq: number };
 
 /** Whether `path` is `ancestor` or sits somewhere inside it. */
 export function isWithin(path: string, ancestor: string): boolean {
-  if (ancestor === "/") return path.startsWith("/");
-  return path === ancestor || path.startsWith(`${ancestor}/`);
+  return platform().isWithin(path, ancestor);
 }

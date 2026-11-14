@@ -1,5 +1,6 @@
 import type { Entry } from "../browse/entries";
 import { formatBytes } from "../shared/format";
+import { platform } from "../shared/platform";
 import { hueFromName } from "./color";
 
 export const MAX_RINGS = 4;
@@ -176,7 +177,8 @@ function layoutNested(ctx: LayoutContext, item: GroupItem, span: Omit<Span, "pat
 
 function layoutChildren(ctx: LayoutContext, span: Span): void {
   const { path, depth, available } = span;
-  const includeFree = depth === 0 && path === ctx.rootPath && path === "/" && available !== null;
+  const includeFree =
+    depth === 0 && path === ctx.rootPath && platform().isVolumeRoot(path) && available !== null;
   const { items, bytesTotal } = groupListing(span.entries, path, includeFree, available);
   if (items.length === 0) return;
 

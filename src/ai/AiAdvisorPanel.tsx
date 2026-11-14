@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { runningInApp } from "../shared/format";
 import { CloseIcon, SparklesIcon } from "../shared/icons";
+import { platform } from "../shared/platform";
 import {
   type AiProviderId,
   type AiProviderStatus,
@@ -26,13 +27,6 @@ type Props = {
   onOpenSettings: () => void;
   onItemTrashed?: (path: string, freedBytes: number) => void;
 };
-
-const STARTER_PROMPTS = [
-  "What can I safely delete right now to free up space?",
-  "Analyze the current folder and tell me what is taking space",
-  "Explain my largest files and what can be cleaned up",
-  "Find developer caches, DerivedData, and build artifacts",
-];
 
 export function AiAdvisorPanel({
   ai,
@@ -272,7 +266,7 @@ function EmptyChat({ providerName, disabled, onAsk }: EmptyChatProps) {
       </p>
       <div className="ai-starter-list">
         <span className="ai-starter-title">Suggested questions:</span>
-        {STARTER_PROMPTS.map((prompt) => (
+        {platform().starterPrompts.map((prompt) => (
           <button
             key={prompt}
             type="button"

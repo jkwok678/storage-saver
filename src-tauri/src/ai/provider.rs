@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::cli::{command_with_env, find_binary, output_with_timeout};
 use super::types::{AiModel, AiProviderStatus};
+use crate::platform::MACHINE;
 
 /// `auth status` should answer at once; a hung CLI must not leave the panel checking forever.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
@@ -243,7 +244,7 @@ fn run_connect_provider(provider: &str) -> Result<AiProviderStatus, String> {
     match provider {
         "claude" => {
             let binary = find_binary(&["claude"]).ok_or_else(|| {
-                "Claude Code CLI (`claude`) is not installed on this Mac.".to_string()
+                format!("Claude Code CLI (`claude`) is not installed on this {MACHINE}.")
             })?;
             let output = output_with_timeout(
                 command_with_env(&binary)
@@ -265,7 +266,7 @@ fn run_connect_provider(provider: &str) -> Result<AiProviderStatus, String> {
         }
         "cursor" => {
             let binary = find_binary(&["cursor-agent", "agent"]).ok_or_else(|| {
-                "Cursor CLI (`cursor-agent`) is not installed on this Mac.".to_string()
+                format!("Cursor CLI (`cursor-agent`) is not installed on this {MACHINE}.")
             })?;
             let output = output_with_timeout(
                 command_with_env(&binary)

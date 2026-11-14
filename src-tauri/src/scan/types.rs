@@ -13,14 +13,14 @@ pub struct DiskSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChildEntry {
-    pub(super) name: String,
-    pub(super) path: String,
-    pub(super) is_dir: bool,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) is_dir: bool,
     /// Known up front for files and stored folders. `None` until a walk measures the folder.
-    pub(super) bytes: Option<u64>,
+    pub(crate) bytes: Option<u64>,
     /// Last modification time, in seconds since the Unix epoch.
-    pub(super) modified: Option<u64>,
-    pub(super) error: Option<String>,
+    pub(crate) modified: Option<u64>,
+    pub(crate) error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

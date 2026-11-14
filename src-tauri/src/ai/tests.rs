@@ -146,6 +146,7 @@ fn reads_claude_stream_json_error_result() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn drops_protected_and_parent_dir_recommendations() {
     let raw = |path: &str| RawRecommendation {

@@ -1,13 +1,12 @@
 //! Pull recommended paths out of an answer and check them on disk.
 
 use std::collections::HashSet;
-use std::env;
 use std::path::{Component, Path};
 
 use serde::Deserialize;
 
 use super::types::AiRecommendation;
-use crate::scan;
+use crate::{platform, scan};
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct RawRecommendation {
@@ -79,7 +78,7 @@ pub(super) fn resolve_recommendations(
 ) -> Vec<AiRecommendation> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    let home = env::var("HOME").ok();
+    let home = platform::home_dir();
 
     for raw in raw_recs {
         if cancelled() {
@@ -89,7 +88,7 @@ pub(super) fn resolve_recommendations(
         if path_str.starts_with("~/")
             && let Some(ref h) = home
         {
-            path_str = format!("{h}/{}", &path_str[2..]);
+            path_str = format!("{}/{}", h.display(), &path_str[2..]);
         }
         if !path_str.starts_with('/') || path_str == "/" {
             continue;

@@ -7,11 +7,11 @@ use std::path::{Component, Path, PathBuf};
 use super::types::ChildEntry;
 
 const NO_NODE: u32 = u32::MAX;
-pub(super) const DENIED: u8 = 1;
+pub(crate) const DENIED: u8 = 1;
 const FAILED: u8 = 2;
 
 #[derive(Debug)]
-pub(super) enum MeasureError {
+pub(crate) enum MeasureError {
     NotPermitted,
     Message(String),
 }
@@ -44,9 +44,9 @@ pub struct Tree {
 
 /// Errors met while reading one folder, folded into its node afterwards.
 #[derive(Default)]
-pub(super) struct Trouble {
-    pub(super) flags: u8,
-    pub(super) message: Option<String>,
+pub(crate) struct Trouble {
+    pub(crate) flags: u8,
+    pub(crate) message: Option<String>,
 }
 
 impl Node {
@@ -282,7 +282,7 @@ impl Tree {
 }
 
 impl Trouble {
-    pub(super) fn note_io(&mut self, err: &std::io::Error) {
+    pub(crate) fn note_io(&mut self, err: &std::io::Error) {
         match err.kind() {
             ErrorKind::PermissionDenied => self.flags |= DENIED,
             ErrorKind::NotFound => {}
@@ -297,7 +297,7 @@ impl Trouble {
 }
 
 impl MeasureError {
-    pub(super) fn text(self) -> String {
+    pub(crate) fn text(self) -> String {
         match self {
             MeasureError::NotPermitted => "Not permitted".to_string(),
             MeasureError::Message(message) => message,

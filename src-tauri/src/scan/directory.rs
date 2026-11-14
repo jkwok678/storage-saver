@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 
 use tauri::ipc::Channel;
 
-use super::listing::list_children;
 use super::lock;
 use super::tree::{MeasureError, Tree};
 use super::types::{ChildEntry, ScanEvent};
 use super::walk::{measure_tree, worker_count};
-use super::{SCAN_GENERATION, STORED, cancel_if_current, scan_cancelled};
+use super::{SCAN_GENERATION, cancel_if_current, scan_cancelled, stored_for};
+use crate::platform::list_children;
 
 pub(super) async fn scan_directory(
     path: String,
@@ -32,9 +32,13 @@ fn run_scan(path: String, refresh: bool, on_event: Channel<ScanEvent>) -> Result
     if !root.is_absolute() {
         return Err("path must be absolute".into());
     }
-    scan_into(&STORED, &root, refresh, Some(generation), |event| {
-        on_event.send(event).is_ok()
-    })
+    scan_into(
+        stored_for(&root),
+        &root,
+        refresh,
+        Some(generation),
+        |event| on_event.send(event).is_ok(),
+    )
 }
 
 /// List `root`, fill in what the stored tree already knows, and walk only the folders it

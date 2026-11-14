@@ -2,94 +2,30 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use super::listing::{allocated_bytes, is_real_dir};
+use super::listing::is_real_dir;
 use super::lock;
 use super::tree::Tree;
 use super::types::{LargestFile, TrashOutcome};
 use super::walk::measure_tree;
-use super::{STORED, STORED_LARGEST};
+use super::{STORED_LARGEST, stored_for};
+use crate::platform::{self, allocated_bytes, lowercase};
 
 pub fn is_protected_path(path: &Path) -> bool {
-    // APFS ignores case by default, so `/system` and `~/library` name the protected folders too.
-    let path = &lowercase(path);
-    let protected_exact = [
-        "/",
-        "/System",
-        "/Library",
-        "/Applications",
-        "/Users",
-        "/bin",
-        "/sbin",
-        "/usr",
-        "/var",
-        "/private",
-        "/private/var",
-        "/private/etc",
-        "/etc",
-        "/dev",
-        "/Volumes",
-        "/cores",
-        "/opt",
-        "/Users/Shared",
-    ];
-    for entry in protected_exact {
-        if *path == lowercase(Path::new(entry)) {
-            return true;
-        }
-    }
-    if path.starts_with("/system") || path.starts_with("/bin") || path.starts_with("/sbin") {
-        return true;
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = lowercase(Path::new(&home));
-        if *path == home_path {
-            return true;
-        }
-        for top in [
-            "Applications",
-            "Desktop",
-            "Documents",
-            "Downloads",
-            "Library",
-            "Library/Application Support",
-            "Library/Containers",
-            "Library/Group Containers",
-            "Library/Keychains",
-            "Library/Mail",
-            "Library/Messages",
-            "Library/Mobile Documents",
-            "Library/Preferences",
-            "Pictures",
-            "Music",
-            "Movies",
-            ".Trash",
-        ] {
-            if *path == home_path.join(top.to_lowercase()) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn lowercase(path: &Path) -> PathBuf {
-    PathBuf::from(path.to_string_lossy().to_lowercase())
+    platform::is_protected_path(path)
 }
 
 pub(super) async fn move_to_trash(path: String) -> Result<TrashOutcome, String> {
     match tauri::async_runtime::spawn_blocking(move || {
-        let home =
-            std::env::var("HOME").map_err(|_| "Could not determine HOME directory".to_string())?;
-        let trash_dir = PathBuf::from(home).join(".Trash");
+        let target = Path::new(&path);
+        let trash_dir = platform::trash_dir_for(target)?;
         trash_path_into(
-            Path::new(&path),
+            target,
             &trash_dir,
-            &STORED,
+            stored_for(target),
             &STORED_LARGEST,
-            move_with_finder,
+            platform::move_to_trash,
         )
     })
     .await
@@ -118,7 +54,7 @@ pub fn trash_path_into(
     let metadata = fs::symlink_metadata(target).map_err(|err| err.to_string())?;
     // Check the folder the item really sits in, so a linked parent cannot hide a protected one.
     // The item itself is not resolved: a link goes to the Trash, not what it points to.
-    let resolved = match (target.parent().map(fs::canonicalize), target.file_name()) {
+    let resolved = match (target.parent().map(dunce::canonicalize), target.file_name()) {
         (Some(Ok(parent)), Some(name)) => parent.join(name),
         _ => target.to_path_buf(),
     };
@@ -128,7 +64,7 @@ pub fn trash_path_into(
             target.display()
         ));
     }
-    let trash_resolved = fs::canonicalize(trash_dir).unwrap_or_else(|_| trash_dir.to_path_buf());
+    let trash_resolved = dunce::canonicalize(trash_dir).unwrap_or_else(|_| trash_dir.to_path_buf());
     if lowercase(target).starts_with(lowercase(trash_dir))
         || lowercase(&resolved).starts_with(lowercase(&trash_resolved))
     {
@@ -146,7 +82,7 @@ pub fn trash_path_into(
                 .unwrap_or(0)
         })
     } else if metadata.is_file() {
-        allocated_bytes(&metadata)
+        allocated_bytes(target, &metadata)
     } else {
         0
     };
@@ -178,9 +114,7 @@ pub fn trash_path_into(
     }
     {
         let mut largest = lock(stored_largest);
-        let prefix = format!("{}/", target.to_string_lossy());
-        let exact = target.to_string_lossy();
-        largest.retain(|file| file.path != exact.as_ref() && !file.path.starts_with(&prefix));
+        largest.retain(|file| !Path::new(&file.path).starts_with(target));
     }
 
     Ok(TrashOutcome {
@@ -191,54 +125,8 @@ pub fn trash_path_into(
     })
 }
 
-/// Trash through Finder, which records where the item came from so "Put Back" works.
-/// Falls back to a plain move when Finder cannot do it, e.g. when Automation is not allowed.
-fn move_with_finder(target: &Path, trash_dir: &Path) -> Result<(PathBuf, bool), String> {
-    // Finder resolves a link to what it points to, so a link is moved itself instead.
-    let is_link = fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink());
-    if !is_link {
-        match finder_trash(target) {
-            Ok(dest) => return Ok((dest, true)),
-            // Finder trashed it and only its reply went wrong.
-            Err(_) if fs::symlink_metadata(target).is_err() => {
-                let name = target.file_name().unwrap_or_default();
-                return Ok((trash_dir.join(name), true));
-            }
-            Err(_) => {}
-        }
-    }
-    move_into_trash(target, trash_dir).map(|dest| (dest, false))
-}
-
-fn finder_trash(target: &Path) -> Result<PathBuf, String> {
-    // The path goes in as an argument, never into the script text.
-    let output = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "set target to POSIX file (item 1 of argv) as alias",
-            "-e",
-            "tell application \"Finder\" to set trashed to (delete target) as alias",
-            "-e",
-            "return POSIX path of trashed",
-            "-e",
-            "end run",
-        ])
-        .arg(target)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|err| err.to_string())?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let dest = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let dest = dest.strip_suffix('/').unwrap_or(&dest);
-    Ok(PathBuf::from(dest))
-}
-
 /// Rename into `trash_dir`, numbering the name when the Trash already holds one like it.
-pub(super) fn move_into_trash(target: &Path, trash_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn move_into_trash(target: &Path, trash_dir: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(trash_dir).map_err(|err| err.to_string())?;
     let file_name = target
         .file_name()

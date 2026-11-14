@@ -1,6 +1,5 @@
 //! One advisor question: stream the reply, then check the paths it recommends.
 
-use std::env;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::Stdio;
@@ -15,10 +14,10 @@ use super::provider::{CLAUDE_EFFORTS, is_model_id};
 use super::recommend::{extract_recommendations, resolve_recommendations};
 use super::stream::{JsonStream, visible_streaming_prefix};
 use super::types::{AiQueryEvent, ChatTurn};
-use crate::scan;
+use crate::{platform, scan};
 
 static AI_GENERATION: AtomicU64 = AtomicU64::new(0);
-static RUNNING_PID: Mutex<Option<u32>> = Mutex::new(None);
+static RUNNING_CHILD: Mutex<Option<platform::ChildHandle>> = Mutex::new(None);
 
 pub(super) async fn query_ai(
     provider: String,
@@ -53,21 +52,17 @@ pub(super) fn stop_ai_query() {
 }
 
 fn kill_running_child() {
-    if let Ok(mut guard) = RUNNING_PID.lock()
-        && let Some(pid) = guard.take()
+    if let Ok(mut guard) = RUNNING_CHILD.lock()
+        && let Some(handle) = guard.take()
     {
-        // SAFETY: Sending SIGTERM to the tracked child process ID. The id is cleared before the
-        // child is reaped, so it still names our child here.
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        platform::terminate(&handle);
     }
 }
 
-/// Forget `pid` unless a newer query has already registered its own child.
-fn clear_running_pid(pid: u32) {
-    if let Ok(mut guard) = RUNNING_PID.lock()
-        && *guard == Some(pid)
+/// Forget `handle` unless a newer query has already registered its own child.
+fn clear_running_child(handle: &platform::ChildHandle) {
+    if let Ok(mut guard) = RUNNING_CHILD.lock()
+        && guard.as_ref() == Some(handle)
     {
         *guard = None;
     }
@@ -112,7 +107,9 @@ fn run_ai_query(
     let system_context = build_system_instructions(&snapshot);
     let conversation_prompt = build_conversation_prompt(user_prompt, history);
 
-    let home_dir = env::var("HOME").unwrap_or_else(|_| "/Users".into());
+    let home_dir = platform::home_dir()
+        .map(|home| home.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/Users".into());
     let work_dir = current_path
         .filter(|p| Path::new(p).is_dir())
         .unwrap_or(&home_dir);
@@ -199,9 +196,9 @@ fn run_ai_query(
         .spawn()
         .map_err(|err| format!("Failed to start {provider}: {err}"))?;
 
-    let pid = child.id();
-    if let Ok(mut guard) = RUNNING_PID.lock() {
-        *guard = Some(pid);
+    let handle = platform::track_child(&child);
+    if let Ok(mut guard) = RUNNING_CHILD.lock() {
+        *guard = Some(handle.clone());
     }
     // A stop that landed before the id was registered had no child to kill.
     if cancelled() {
@@ -244,7 +241,7 @@ fn run_ai_query(
     }
 
     // Cleared before reaping, so a stop never signals a process id the system has reused.
-    clear_running_pid(pid);
+    clear_running_child(&handle);
     let status = child.wait().map_err(|err| err.to_string())?;
     let stderr_output = stderr_thread.join().unwrap_or_default();
 

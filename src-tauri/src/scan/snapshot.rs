@@ -2,28 +2,29 @@
 
 use std::cmp::Reverse;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use super::directory::fill_stored_sizes;
-use super::listing::{allocated_bytes, is_real_dir, list_children, read_disk_summary};
+use super::listing::is_real_dir;
 use super::lock;
 use super::tree::{Node, Tree};
 use super::types::{SnapshotItem, StorageSnapshot};
 use super::walk::measure_tree;
-use super::{STORED, STORED_LARGEST};
+use super::{STORED, STORED_LARGEST, stored_for};
+use crate::platform::{self, allocated_bytes, list_children};
 
 /// Gather a structured snapshot of known disk usage, current directory items, stored tree folders,
 /// largest files, and common user cache/cleanup locations.
 pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
-    let disk = read_disk_summary().ok();
+    let disk = platform::volume_summary(None).ok();
     let current_path_str = current_path.map(ToOwned::to_owned);
 
     let mut current_items = Vec::new();
     if let Some(dir_str) = current_path {
         let dir = Path::new(dir_str);
         if let Ok(mut children) = list_children(dir) {
-            let _ = fill_stored_sizes(&STORED, dir, &mut children, false);
+            let _ = fill_stored_sizes(stored_for(dir), dir, &mut children, false);
             for child in children {
                 if let Some(bytes) = child.bytes {
                     current_items.push(SnapshotItem {
@@ -40,79 +41,51 @@ pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
         }
     }
 
-    let (top_folders, dense_folders) = {
-        let guard = lock(&STORED);
-        match guard.as_ref() {
-            Some(tree) => (
-                ranked_folders(tree, 40, 0, |node| node.total),
-                ranked_folders(tree, 25, 10 * 1024 * 1024, |node| node.own),
-            ),
-            None => (Vec::new(), Vec::new()),
+    let mut top_folders = Vec::new();
+    let mut dense_folders = Vec::new();
+    for slot in &STORED {
+        if let Some(tree) = lock(slot).as_ref() {
+            top_folders.extend(ranked_folders(tree, 40, 0, |node| node.total));
+            dense_folders.extend(ranked_folders(tree, 25, 10 * 1024 * 1024, |node| node.own));
         }
-    };
+    }
+    top_folders.sort_by_key(|item| Reverse(item.bytes));
+    top_folders.truncate(40);
+    dense_folders.sort_by_key(|item| Reverse(item.own_bytes));
+    dense_folders.truncate(25);
 
     let mut largest_files = lock(&STORED_LARGEST).clone();
     largest_files.truncate(40);
 
     let mut notable_locations = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        let home_path = PathBuf::from(&home);
-        let candidates = [
-            "Library/Caches",
-            "Downloads",
-            ".Trash",
-            "Library/Logs",
-            "Library/Developer/Xcode/DerivedData",
-            "Library/Developer/CoreSimulator",
-            "Library/Application Support",
-            "Library/Containers",
-            ".npm",
-            ".cargo/registry",
-            ".cache",
-        ];
-        for rel in candidates {
-            let candidate = home_path.join(rel);
-            if !candidate.exists() {
-                continue;
-            }
-            let known_bytes = {
-                let guard = lock(&STORED);
-                guard
-                    .as_ref()
-                    .and_then(|tree| tree.find(&candidate).and_then(|id| tree.size_of(id).ok()))
-            };
-            let bytes = known_bytes.or_else(|| {
-                if matches!(
-                    rel,
-                    ".Trash"
-                        | "Library/Caches"
-                        | "Library/Logs"
-                        | "Library/Developer/Xcode/DerivedData"
-                        | ".npm"
-                        | ".cargo/registry"
-                        | ".cache"
-                ) {
-                    measure_tree(&candidate, None, &Arc::default())
-                        .ok()
-                        .and_then(|t| t.size_of(0).ok())
-                } else {
-                    None
-                }
-            });
-            if let Some(bytes) = bytes
-                && bytes > 0
-            {
-                notable_locations.push(SnapshotItem {
-                    path: candidate.to_string_lossy().into_owned(),
-                    name: format!("~/{rel}"),
-                    is_dir: true,
-                    bytes,
-                    own_bytes: 0,
-                });
-            }
+    for notable in platform::notable_locations() {
+        if !notable.path.exists() {
+            continue;
         }
-        notable_locations.sort_by_key(|item| Reverse(item.bytes));
+        let known_bytes = lock(stored_for(&notable.path)).as_ref().and_then(|tree| {
+            tree.find(&notable.path)
+                .and_then(|id| tree.size_of(id).ok())
+        });
+        let bytes = known_bytes.or_else(|| {
+            notable
+                .measure
+                .then(|| measure_tree(&notable.path, None, &Arc::default()).ok())
+                .flatten()
+                .and_then(|t| t.size_of(0).ok())
+        });
+        if let Some(bytes) = bytes
+            && bytes > 0
+        {
+            notable_locations.push(SnapshotItem {
+                path: notable.path.to_string_lossy().into_owned(),
+                name: notable.label,
+                is_dir: true,
+                bytes,
+                own_bytes: 0,
+            });
+        }
     }
+    notable_locations.sort_by_key(|item| Reverse(item.bytes));
 
     StorageSnapshot {
         disk,
@@ -133,7 +106,7 @@ pub(super) fn ranked_folders(
     min: u64,
     key: impl Fn(&Node) -> u64,
 ) -> Vec<SnapshotItem> {
-    let skip_root = tree.root == Path::new("/");
+    let skip_root = platform::is_volume_root(&tree.root);
     let mut ids: Vec<u32> = (0..tree.nodes.len() as u32)
         .filter(|&id| !(id == 0 && skip_root) && key(&tree.nodes[id as usize]) > min)
         .collect();
@@ -171,14 +144,14 @@ pub fn inspect_path_size(path: &Path) -> Option<(u64, bool)> {
     let is_dir = is_real_dir(&metadata.file_type());
     if !is_dir {
         let bytes = if metadata.is_file() {
-            allocated_bytes(&metadata)
+            allocated_bytes(path, &metadata)
         } else {
             0
         };
         return Some((bytes, false));
     }
     {
-        let guard = lock(&STORED);
+        let guard = lock(stored_for(path));
         if let Some(tree) = guard.as_ref()
             && let Some(id) = tree.find(path)
             && let Ok(bytes) = tree.size_of(id)

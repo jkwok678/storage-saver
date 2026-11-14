@@ -28,6 +28,7 @@ pub(super) async fn query_ai(
     effort: Option<String>,
     on_event: Channel<AiQueryEvent>,
 ) -> Result<(), String> {
+    let current_path = current_path.and_then(|path| platform::normalize_input(&path).ok());
     match tauri::async_runtime::spawn_blocking(move || {
         run_ai_query(
             &provider,

@@ -85,18 +85,26 @@ pub(super) fn resolve_recommendations(
             break;
         }
         let mut path_str = raw.path.trim().to_string();
-        if path_str.starts_with("~/")
+        if let Some(rest) = path_str
+            .strip_prefix("~/")
+            .or_else(|| path_str.strip_prefix("~\\"))
             && let Some(ref h) = home
         {
-            path_str = format!("{}/{}", h.display(), &path_str[2..]);
+            path_str = format!("{}/{}", h.display(), rest);
         }
-        if !path_str.starts_with('/') || path_str == "/" {
+        if path_str.chars().any(char::is_control) {
             continue;
         }
+        let Ok(mut path_str) = platform::normalize_input(&path_str) else {
+            continue;
+        };
         while path_str.len() > 1 && path_str.ends_with('/') {
             path_str.pop();
         }
         let path = Path::new(&path_str);
+        if !path.is_absolute() || platform::is_volume_root(path) {
+            continue;
+        }
         // `..` would point somewhere other than the path shown, and protected folders cannot be
         // trashed anyway, so neither is worth offering.
         if path.components().any(|c| c == Component::ParentDir) || scan::is_protected_path(path) {

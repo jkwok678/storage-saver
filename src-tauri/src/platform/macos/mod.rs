@@ -11,7 +11,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
-use super::Notable;
+use super::{Notable, Volume};
 use crate::scan::tree::{DENIED, MeasureError, Trouble};
 use crate::scan::{ChildEntry, DiskSummary};
 
@@ -21,6 +21,14 @@ pub(crate) use trash::{is_protected_path, move_to_trash, trash_dir_for};
 /// Stored trees are kept per volume. macOS has one.
 pub(crate) fn volume_slot(_path: &Path) -> usize {
     0
+}
+
+/// The path that lists every volume instead of a folder. macOS has a single root.
+pub(crate) const VIRTUAL_ROOT: Option<&str> = None;
+
+/// A path as sent by the frontend, in the form the rest of the backend expects.
+pub(crate) fn normalize_input(path: &str) -> Result<String, String> {
+    Ok(path.to_string())
 }
 
 pub(crate) fn is_volume_root(path: &Path) -> bool {
@@ -50,6 +58,20 @@ pub(crate) fn volume_summary(_path: Option<&Path>) -> Result<DiskSummary, String
         available,
         used,
     })
+}
+
+pub(crate) fn volumes() -> Vec<Volume> {
+    let (total, available, error) = match volume_summary(None) {
+        Ok(summary) => (summary.total, summary.available, None),
+        Err(err) => (0, 0, Some(err)),
+    };
+    vec![Volume {
+        path: PathBuf::from("/"),
+        label: "Boot Disk".to_string(),
+        total,
+        available,
+        error,
+    }]
 }
 
 pub(crate) fn list_children(root: &Path) -> Result<Vec<ChildEntry>, String> {

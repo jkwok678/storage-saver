@@ -3,19 +3,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64 as StdAtomic;
 
-use super::directory::scan_into;
+use super::directory::{scan_into, scan_virtual_root};
 use super::largest::{LargestScan, largest_walk};
+use super::listing::volume_entry;
 use super::snapshot::ranked_folders;
 use super::trash::move_into_trash;
 use super::tree::MeasureError;
 use super::walk::{measure_tree, walk_pool};
 use super::*;
-use crate::platform::allocated_bytes;
+use crate::platform::{Volume, allocated_bytes};
 
 mod shared;
 
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(windows)]
+mod windows;
 
 struct TempDir(PathBuf);
 

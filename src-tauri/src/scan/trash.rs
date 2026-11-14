@@ -17,6 +17,7 @@ pub fn is_protected_path(path: &Path) -> bool {
 }
 
 pub(super) async fn move_to_trash(path: String) -> Result<TrashOutcome, String> {
+    let path = platform::normalize_input(&path)?;
     match tauri::async_runtime::spawn_blocking(move || {
         let target = Path::new(&path);
         let trash_dir = platform::trash_dir_for(target)?;
@@ -126,6 +127,8 @@ pub fn trash_path_into(
 }
 
 /// Rename into `trash_dir`, numbering the name when the Trash already holds one like it.
+/// Windows never falls back to a plain move: the Recycle Bin is not a folder to rename into.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn move_into_trash(target: &Path, trash_dir: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(trash_dir).map_err(|err| err.to_string())?;
     let file_name = target
@@ -138,6 +141,7 @@ pub(crate) fn move_into_trash(target: &Path, trash_dir: &Path) -> Result<PathBuf
     Ok(dest)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn unique_trash_destination(trash_dir: &Path, name: &str) -> PathBuf {
     let initial = trash_dir.join(name);
     if fs::symlink_metadata(&initial).is_err() {

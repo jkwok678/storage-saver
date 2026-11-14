@@ -327,3 +327,59 @@ fn largest_pruning_keeps_sibling_with_same_prefix() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].name, "kept.bin");
 }
+
+#[test]
+fn stored_slots_are_per_volume() {
+    let root = TempDir::new();
+    assert!(std::ptr::eq(
+        stored_for(&root.0),
+        stored_for(&root.0.join("inside"))
+    ));
+    #[cfg(target_os = "macos")]
+    assert!(std::ptr::eq(
+        stored_for(Path::new("/")),
+        stored_for(Path::new("/tmp"))
+    ));
+}
+
+#[test]
+fn volume_listing_serializes_for_the_frontend() {
+    let volume = Volume {
+        path: PathBuf::from("/disk"),
+        label: "Data Disk".into(),
+        total: 1000,
+        available: 400,
+        error: None,
+    };
+    let json = serde_json::to_value(volume_entry(&volume)).unwrap();
+    assert_eq!(json["name"], "Data Disk");
+    assert_eq!(json["path"], "/disk");
+    assert_eq!(json["isDir"], true);
+    assert_eq!(json["bytes"], 600);
+    assert!(json["modified"].is_null());
+    assert!(json["error"].is_null());
+
+    let broken = Volume {
+        error: Some("Not ready".into()),
+        total: 0,
+        available: 0,
+        ..volume
+    };
+    let json = serde_json::to_value(volume_entry(&broken)).unwrap();
+    assert_eq!(json["bytes"], 0);
+    assert_eq!(json["error"], "Not ready");
+}
+
+#[test]
+fn listing_the_top_level_stores_nothing() {
+    let mut events = Vec::new();
+    scan_virtual_root(|event| {
+        events.push(event);
+        true
+    });
+    assert!(matches!(
+        events.as_slice(),
+        [ScanEvent::Started { .. }, ScanEvent::Done]
+    ));
+    assert!(STORED.iter().all(|slot| lock(slot).is_none()));
+}

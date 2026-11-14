@@ -8,23 +8,27 @@ pub(super) fn build_system_instructions(snapshot: &StorageSnapshot) -> String {
     let mut ctx = String::with_capacity(4096);
     ctx.push_str(ADVISOR_RULES);
 
-    if let Some(disk) = &snapshot.disk {
+    for (label, disk) in &snapshot.volumes {
         let pct = if disk.total > 0 {
             (disk.used as f64 / disk.total as f64) * 100.0
         } else {
             0.0
         };
         ctx.push_str(&format!(
-            "Boot Disk: {:.1}% full — {} used of {} total ({} available)\n\n",
+            "{label}: {:.1}% full — {} used of {} total ({} available)\n",
             pct,
             human_bytes(disk.used),
             human_bytes(disk.total),
             human_bytes(disk.available)
         ));
     }
+    if !snapshot.volumes.is_empty() {
+        ctx.push('\n');
+    }
 
     if let Some(curr) = &snapshot.current_path {
-        ctx.push_str(&format!("Currently Viewed Folder: {curr}\n"));
+        let shown = if curr.is_empty() { "This PC" } else { curr };
+        ctx.push_str(&format!("Currently Viewed Folder: {shown}\n"));
         if !snapshot.current_items.is_empty() {
             ctx.push_str("Items in Current Folder (sorted by size):\n");
             for item in &snapshot.current_items {

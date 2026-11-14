@@ -70,7 +70,8 @@ pub struct SnapshotItem {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageSnapshot {
-    pub disk: Option<DiskSummary>,
+    /// Each readable volume by name.
+    pub volumes: Vec<(String, DiskSummary)>,
     pub current_path: Option<String>,
     pub current_items: Vec<SnapshotItem>,
     pub top_folders: Vec<SnapshotItem>,

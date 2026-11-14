@@ -5,6 +5,14 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::*;
 
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(crate) use windows::*;
+
+#[cfg(any(windows, test))]
+pub(crate) mod winpath;
+
 #[cfg(not(any(target_os = "macos", windows)))]
 compile_error!("Storage Saver supports macOS and Windows only.");
 
@@ -22,6 +30,8 @@ pub(crate) enum BulkEntry {
     Folder(String),
     /// Links, sockets and the like. They take no space of their own worth counting.
     Other,
+    /// Only macOS reports an error per entry. Windows reports it for the whole folder.
+    #[cfg_attr(windows, allow(dead_code))]
     Error(i32),
 }
 
@@ -31,6 +41,16 @@ pub(crate) struct Notable {
     pub(crate) label: String,
     /// Worth measuring when no scan has covered it yet.
     pub(crate) measure: bool,
+}
+
+/// A disk the user can open from the top level.
+pub(crate) struct Volume {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) label: String,
+    pub(crate) total: u64,
+    pub(crate) available: u64,
+    /// Why its capacity could not be read.
+    pub(crate) error: Option<String>,
 }
 
 pub(crate) fn lowercase(path: &std::path::Path) -> std::path::PathBuf {

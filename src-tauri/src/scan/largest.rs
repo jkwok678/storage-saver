@@ -15,7 +15,7 @@ use super::lock;
 use super::types::{LargestEvent, LargestFile};
 use super::walk::walk_pool;
 use super::{LARGEST_GENERATION, STORED_LARGEST, largest_cancelled};
-use crate::platform::{BulkEntry, FileKey, is_excluded, read_dir_bulk};
+use crate::platform::{self, BulkEntry, FileKey, is_excluded, read_dir_bulk};
 
 pub(super) async fn scan_largest_files(
     path: String,
@@ -36,14 +36,16 @@ fn run_largest_scan(
     on_event: Channel<LargestEvent>,
 ) -> Result<(), String> {
     let generation = LARGEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    let root = PathBuf::from(&path);
-    if !root.is_absolute() {
-        return Err("path must be absolute".into());
-    }
-    let metadata = fs::symlink_metadata(&root).map_err(|err| err.to_string())?;
-    if !is_real_dir(&metadata.file_type()) {
-        return Err("path must be a folder".into());
-    }
+    let path = platform::normalize_input(&path)?;
+    let roots = if platform::VIRTUAL_ROOT == Some(path.as_str()) {
+        platform::volumes()
+            .into_iter()
+            .filter(|volume| volume.error.is_none())
+            .map(|volume| volume.path)
+            .collect()
+    } else {
+        vec![folder_root(&path)?]
+    };
     let scan = LargestScan::new(limit.clamp(1, 1_000));
 
     std::thread::scope(|scope| {
@@ -74,7 +76,10 @@ fn run_largest_scan(
             }
         });
         walk_pool().scope(|walk_scope| {
-            largest_walk(walk_scope, &scan, root.clone(), Some(generation));
+            for root in roots {
+                let scan = &scan;
+                walk_scope.spawn(move |scope| largest_walk(scope, scan, root, Some(generation)));
+            }
         });
         drop(done_tx);
     });
@@ -91,6 +96,18 @@ fn run_largest_scan(
     });
     let _ = on_event.send(LargestEvent::Done { scanned });
     Ok(())
+}
+
+fn folder_root(path: &str) -> Result<PathBuf, String> {
+    let root = PathBuf::from(path);
+    if !root.is_absolute() {
+        return Err("path must be absolute".into());
+    }
+    let metadata = fs::symlink_metadata(&root).map_err(|err| err.to_string())?;
+    if !is_real_dir(&metadata.file_type()) {
+        return Err("path must be a folder".into());
+    }
+    Ok(root)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

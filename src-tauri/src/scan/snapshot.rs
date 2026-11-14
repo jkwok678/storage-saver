@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::directory::fill_stored_sizes;
-use super::listing::is_real_dir;
+use super::listing::{is_real_dir, volume_listing};
 use super::lock;
 use super::tree::{Node, Tree};
-use super::types::{SnapshotItem, StorageSnapshot};
+use super::types::{ChildEntry, DiskSummary, SnapshotItem, StorageSnapshot};
 use super::walk::measure_tree;
 use super::{STORED, STORED_LARGEST, stored_for};
 use crate::platform::{self, allocated_bytes, list_children};
@@ -17,28 +17,36 @@ use crate::platform::{self, allocated_bytes, list_children};
 /// Gather a structured snapshot of known disk usage, current directory items, stored tree folders,
 /// largest files, and common user cache/cleanup locations.
 pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
-    let disk = platform::volume_summary(None).ok();
+    let volumes = platform::volumes()
+        .into_iter()
+        .filter(|volume| volume.error.is_none())
+        .map(|volume| {
+            let used = volume.total.saturating_sub(volume.available);
+            let summary = DiskSummary {
+                total: volume.total,
+                available: volume.available,
+                used,
+            };
+            (volume.label, summary)
+        })
+        .collect();
     let current_path_str = current_path.map(ToOwned::to_owned);
 
     let mut current_items = Vec::new();
-    if let Some(dir_str) = current_path {
-        let dir = Path::new(dir_str);
-        if let Ok(mut children) = list_children(dir) {
-            let _ = fill_stored_sizes(stored_for(dir), dir, &mut children, false);
-            for child in children {
-                if let Some(bytes) = child.bytes {
-                    current_items.push(SnapshotItem {
-                        path: child.path,
-                        name: child.name,
-                        is_dir: child.is_dir,
-                        bytes,
-                        own_bytes: if child.is_dir { 0 } else { bytes },
-                    });
-                }
+    if let Some(children) = current_path.and_then(current_children) {
+        for child in children {
+            if let Some(bytes) = child.bytes {
+                current_items.push(SnapshotItem {
+                    path: child.path,
+                    name: child.name,
+                    is_dir: child.is_dir,
+                    bytes,
+                    own_bytes: if child.is_dir { 0 } else { bytes },
+                });
             }
-            current_items.sort_by_key(|item| Reverse(item.bytes));
-            current_items.truncate(35);
         }
+        current_items.sort_by_key(|item| Reverse(item.bytes));
+        current_items.truncate(35);
     }
 
     let mut top_folders = Vec::new();
@@ -88,7 +96,7 @@ pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
     notable_locations.sort_by_key(|item| Reverse(item.bytes));
 
     StorageSnapshot {
-        disk,
+        volumes,
         current_path: current_path_str,
         current_items,
         top_folders,
@@ -96,6 +104,17 @@ pub fn storage_snapshot(current_path: Option<&str>) -> StorageSnapshot {
         largest_files,
         notable_locations,
     }
+}
+
+/// What the viewed folder holds, with the sizes already known. The top level is the volumes.
+fn current_children(dir_str: &str) -> Option<Vec<ChildEntry>> {
+    if platform::VIRTUAL_ROOT == Some(dir_str) {
+        return Some(volume_listing());
+    }
+    let dir = Path::new(dir_str);
+    let mut children = list_children(dir).ok()?;
+    let _ = fill_stored_sizes(stored_for(dir), dir, &mut children, false);
+    Some(children)
 }
 
 /// The `limit` folders with the most `key` bytes above `min`. A whole-disk tree holds millions of

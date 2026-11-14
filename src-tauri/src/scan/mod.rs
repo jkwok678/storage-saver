@@ -70,8 +70,11 @@ fn largest_cancelled(generation: u64) -> bool {
 }
 
 #[tauri::command]
-pub fn disk_summary() -> Result<DiskSummary, String> {
-    platform::volume_summary(None)
+pub fn disk_summary(path: Option<String>) -> Result<DiskSummary, String> {
+    let path = path
+        .map(|path| platform::normalize_input(&path))
+        .transpose()?;
+    platform::volume_summary(path.as_deref().map(Path::new))
 }
 
 #[tauri::command]
